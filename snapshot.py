@@ -28,11 +28,32 @@ import urllib.request
 from datetime import datetime, timezone
 
 API = "https://api.guildwars2.com/v2"
-REGIONS = ("na", "eu")
+
+# The na/eu path segment on the ladder endpoint is IGNORED by the API. It serves
+# whichever regional board matches the caller's own IP. Verified 2026-09-09 by
+# requesting the same URL from two places within seconds of each other:
+#
+#   from Europe, .../ladder/na  -> 166 entries, top thelordofdarkness.1982
+#   from the US, .../ladder/eu  -> 102 entries, top ashkew.3204
+#
+# The two rosters had zero names in common. So a collector can only ever record
+# the board of the region it physically runs in, and asking for both paths just
+# fetched the same board twice. LADDER_REGION therefore describes where this
+# runner sits - it is a label for the data, not a request parameter. A GitHub-
+# hosted runner is in the US, hence the default.
+REGION = (os.environ.get("LADDER_REGION") or "na").strip().lower()
+if REGION not in ("na", "eu"):
+    raise SystemExit("LADDER_REGION must be 'na' or 'eu', got %r" % REGION)
+# Any path is fine since it is ignored; send the one we believe we are getting so
+# the request is at least self-describing in ArenaNet's logs.
+REGION_PATH = REGION
+
 DATA_DIR = "data"
 HISTORY = os.path.join(DATA_DIR, "history.json")
 ARCHIVE_DIR = os.path.join(DATA_DIR, "seasons")
-PLAYER_DIR = os.path.join(DATA_DIR, "players")
+PLAYER_ROOT = os.path.join(DATA_DIR, "players")
+PLAYER_DIR = os.path.join(PLAYER_ROOT, REGION)
+BOARD = os.path.join(DATA_DIR, "board_%s.json" % REGION)
 MAX_SERIES = 4000            # ~5.5 months of hourly points
 MAX_POINTS = 4000            # per-player cap
 FORCE_POINT_AFTER_H = 6      # record a point even when nothing changed, this often
@@ -83,6 +104,18 @@ def scoring_ids(season):
         name = str(s.get("name", "")).strip().lower()
         if name:
             out[name] = s.get("id")
+    return out
+
+
+def tier_ladder(season):
+    """Flatten ranks -> sub-tiers, ascending by rating ceiling."""
+    out = []
+    for r in season.get("ranks") or []:
+        for i, t in enumerate(r.get("tiers") or []):
+            if t and t.get("rating") is not None:
+                out.append({"name": "%s %d" % (r.get("name"), i + 1),
+                            "ceil": t["rating"]})
+    out.sort(key=lambda x: x["ceil"])
     return out
 
 
@@ -258,6 +291,58 @@ def update_player_files(rows, iso, season_id):
     return written
 
 
+def migrate_layout(hist):
+    """One-off move from the old single-region layout to the per-region one.
+
+    The old collector believed na and eu were the same global ladder, so it wrote
+    every player file flat in data/players/ and recorded two identical series in
+    history.json. Both assumptions were wrong: the files are the board of
+    whichever region the runner sits in, and the second series is the first one
+    under a false label.
+
+    Idempotent - after the first run there is nothing left to move, and it is a
+    no-op on a fresh checkout. Nothing is deleted without a copy being archived
+    first, because the mislabelled series is still real observations.
+    """
+    moved_files = 0
+    # Flat player files -> data/players/<REGION>/. Only *.json directly inside
+    # data/players counts; the region directories themselves are skipped.
+    if os.path.isdir(PLAYER_ROOT):
+        stray = [f for f in os.listdir(PLAYER_ROOT)
+                 if f.endswith(".json")
+                 and os.path.isfile(os.path.join(PLAYER_ROOT, f))]
+        if stray:
+            os.makedirs(PLAYER_DIR, exist_ok=True)
+            for f in stray:
+                src = os.path.join(PLAYER_ROOT, f)
+                dst = os.path.join(PLAYER_DIR, f)
+                if os.path.exists(dst):
+                    # Already migrated by an earlier interrupted run; the
+                    # destination is the newer file, so drop the stray copy.
+                    os.remove(src)
+                else:
+                    shutil.move(src, dst)
+                moved_files += 1
+            print("migrated %d player files -> %s" % (moved_files, PLAYER_DIR))
+
+    # The duplicate region series. Keep only the region this runner actually
+    # observes; archive the rest before dropping it.
+    dropped = []
+    if hist and isinstance(hist.get("regions"), dict):
+        extra = [r for r in hist["regions"] if r != REGION]
+        if extra:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            copy = os.path.join(ARCHIVE_DIR, "premigration-%s.json" % stamp)
+            save(copy, hist)
+            print("archived pre-migration history -> %s" % copy)
+            for r in extra:
+                hist["regions"].pop(r, None)
+                dropped.append(r)
+            print("dropped mislabelled region series: %s (kept %s)"
+                  % (", ".join(dropped), REGION))
+    return moved_files, dropped
+
+
 def load(path):
     """None if the file does not exist. Raises if it exists but cannot be parsed.
 
@@ -300,23 +385,16 @@ def main():
     iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     print("season: %s (%s)  active=%s" % (season.get("name"), season["id"], season.get("active")))
 
-    boards, failed = {}, []
-    for region in REGIONS:
-        try:
-            rows, total, served = board(season["id"], region)
-        except RuntimeError as e:
-            # The two regions are the same global ladder, so losing one is not
-            # worth losing the hour. Record what we got and carry on.
-            print("  %s: FETCH FAILED (%s)" % (region, e))
-            failed.append(region)
-            continue
-        boards[region] = shape(rows, smap)
-        print("  %s: %d entries (X-Result-Total %s) upstream Date: %s"
-              % (region, len(rows), total, served))
-    if len(failed) == len(REGIONS):
-        raise RuntimeError("every region failed; leaving history untouched")
+    # One fetch. The region path is ignored upstream, so asking for both spellings
+    # only ever retrieved the same board twice - pure waste against an API we want
+    # to touch as little as possible.
+    rows, total, served = board(season["id"], REGION_PATH)
+    rows = shape(rows, smap)
+    print("  %s: %d entries (X-Result-Total %s) upstream Date: %s"
+          % (REGION, len(rows), total, served))
 
     hist = load(HISTORY)
+    migrate_layout(hist)
 
     # Season rollover: archive the finished season, start a clean one.
     if hist and hist.get("seasonId") and hist["seasonId"] != season["id"]:
@@ -327,7 +405,7 @@ def main():
         # whose seasonId does not match, so leaving them in place would delete a
         # whole season of rating history the first time each player reappeared.
         if os.path.isdir(PLAYER_DIR):
-            dest = os.path.join(ARCHIVE_DIR, old_id, "players")
+            dest = os.path.join(ARCHIVE_DIR, old_id, "players", REGION)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if os.path.exists(dest):
                 shutil.rmtree(dest)
@@ -347,45 +425,65 @@ def main():
                  "ceiling": (r.get("tiers") or [{}])[-1].get("rating")}
                 for r in season.get("ranks") or []
             ],
-            "regions": {r: blank(season, r) for r in REGIONS},
+            # Sub-tier ladder ("Gold 2", not just "Gold"). Stored here so the page
+            # needs no API call of its own just to label a rating - every request
+            # a visitor makes to the official API is one we would rather not make.
+            "tiers": tier_ladder(season),
+            "regions": {},
         }
 
+    # A second collector, running in the other region, writes into the same file.
+    # Only ever touch our own region's slot so the two never clobber each other -
+    # git merges the rest.
+    hist.setdefault("regions", {})
+    hist["regions"].setdefault(REGION, blank(season, REGION))
+
     changed = False
-    for region in REGIONS:
-        if region not in boards:
-            continue                      # fetch failed; leave this region alone
-        rows = boards[region]
-        if not rows:
-            # Empty board is normal at season start, but it is also what a
-            # failed fetch looks like. Only record it while the aggregate is
-            # still empty; never let it clear an accumulated history.
-            if hist["regions"][region].get("snapshots", 0) == 0:
-                hist["regions"][region] = merge(hist["regions"][region], [], iso)
-                changed = True
-            else:
-                print("  %s: empty board, existing history kept" % region)
-            continue
-        hist["regions"][region] = merge(hist["regions"][region], rows, iso)
+    if not rows:
+        # Empty board is normal at season start, but it is also what a failed
+        # fetch looks like. Only record it while the aggregate is still empty;
+        # never let it clear an accumulated history.
+        if hist["regions"][REGION].get("snapshots", 0) == 0:
+            hist["regions"][REGION] = merge(hist["regions"][REGION], [], iso)
+            changed = True
+        else:
+            print("  %s: empty board, existing history kept" % REGION)
+    else:
+        hist["regions"][REGION] = merge(hist["regions"][REGION], rows, iso)
         changed = True
-        # Per-player detail. Only NA is written: the API serves one global board
-        # for both regions, so writing EU as well would duplicate every file.
-        if region == "na":
-            n = update_player_files(rows, iso, season["id"])
-            print("  wrote %d player files" % n)
+        n = update_player_files(rows, iso, season["id"])
+        print("  wrote %d player files" % n)
+        # The board the page renders. Serving stored rows instead of letting each
+        # visitor fetch the ladder themselves is the only way the board and the
+        # history can agree: a visitor in Europe fetching live gets Europe's
+        # roster, for which this collector holds no history at all.
+        save(BOARD, {
+            "region": REGION,
+            "seasonId": season["id"],
+            "seasonName": season.get("name"),
+            "collectedAt": iso,
+            "count": len(rows),
+            "rows": rows,
+        })
+        print("  wrote %s (%d rows)" % (BOARD, len(rows)))
 
     hist["updated"] = iso
     hist["seasonName"] = season.get("name")
     hist["end"] = season.get("end")
+    # Refreshed every pass, not just at creation, so an existing history file
+    # picks these up without being rebuilt from scratch.
+    hist["start"] = season.get("start")
+    hist["tiers"] = tier_ladder(season)
 
     if not changed:
         print("nothing to write")
         return 0
 
     save(HISTORY, hist)
-    for region in REGIONS:
-        a = hist["regions"][region]
-        print("  %s: %d snapshots, %d players ever seen"
-              % (region, a.get("snapshots", 0), len(a.get("players", {}))))
+    for region, a in sorted(hist["regions"].items()):
+        print("  %s: %d snapshots, %d players ever seen%s"
+              % (region, a.get("snapshots", 0), len(a.get("players", {})),
+                 "" if region == REGION else "  (other collector)"))
     print("wrote %s" % HISTORY)
     return 0
 
