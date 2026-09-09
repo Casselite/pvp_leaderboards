@@ -2,9 +2,12 @@ name: Snapshot GW2 ladder
 
 on:
   schedule:
-    # Hourly. GitHub can delay scheduled runs by 5-20 minutes under load,
-    # which is harmless: the API only recomputes the leaderboard hourly.
-    - cron: "0 * * * *"
+    # Minute 23, deliberately NOT 0. Minute zero is the most contended slot on
+    # GitHub's shared runners - every cron on the platform asks for it - and
+    # scheduled runs there are routinely delayed by tens of minutes or dropped
+    # outright under load. An odd off-peak minute is far more reliable, and the
+    # exact minute does not matter: the API only recomputes the board hourly.
+    - cron: "23 * * * *"
   workflow_dispatch:        # lets you run it by hand from the Actions tab
 
 # Needed so the job can push the snapshot back into the repo.
