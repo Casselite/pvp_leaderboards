@@ -2,19 +2,21 @@ name: Snapshot GW2 ladder
 
 on:
   schedule:
-    # Minute 23, deliberately NOT 0. Minute zero is the most contended slot on
-    # GitHub's shared runners - every cron on the platform asks for it - and
-    # scheduled runs there are routinely delayed by tens of minutes or dropped
-    # outright under load. An odd off-peak minute is far more reliable, and the
-    # exact minute does not matter: the API only recomputes the board hourly.
+    # Hourly ATTEMPT, at an off-peak minute. GitHub's scheduler is unreliable -
+    # it silently drops scheduled runs under load, and on this repo it dropped
+    # every single one for five hours straight. So the schedule is treated as a
+    # best-effort kick, not as the thing that guarantees hourly data. The job
+    # below collects on a loop for ~5.5 hours once started, which means a single
+    # cron firing covers most of a day and any individual miss is harmless.
     - cron: "23 * * * *"
-  workflow_dispatch:        # lets you run it by hand from the Actions tab
+  workflow_dispatch:
 
-# Needed so the job can push the snapshot back into the repo.
 permissions:
   contents: write
 
-# If a run is still going when the next hour fires, let it finish.
+# Only one collector at a time. A newer scheduled run waits rather than
+# cancelling the one that is actively collecting; when the running job finishes
+# its ~5.5 hours the queued one takes over, giving near-continuous coverage.
 concurrency:
   group: ladder-snapshot
   cancel-in-progress: false
@@ -22,39 +24,83 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # GitHub allows 6 hours per job. Stop short of that so the loop always exits
+    # cleanly and commits its last snapshot rather than being killed mid-write.
+    timeout-minutes: 350
 
     steps:
-      # v7 runs on Node 24. There is deliberately no setup-python step:
-      # ubuntu-latest already ships Python 3 and snapshot.py uses only the
-      # standard library, so that is one less action to keep up to date.
       - uses: actions/checkout@v7
 
-      - name: Fetch ladder and update history
-        run: python3 snapshot.py
-
-      - name: Commit if anything changed
+      - name: Collect on the hour for ~5.5 hours
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
-          if [ -z "$(git status --porcelain data)" ]; then
-            echo "No change; nothing to commit."
-            exit 0
-          fi
+          set -u
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data -- ":!*.tmp"
-          git commit -m "ladder snapshot $(date -u +'%Y-%m-%dT%H:%MZ')"
-          # Someone else may have pushed while this run worked. These files are
-          # single-line JSON rewritten wholesale, so a competing change to data/
-          # conflicts every time - and a conflicted rebase left in progress makes
-          # every later attempt fail instantly with "unmerged files". Abort any
-          # in-progress rebase first, and keep our freshly collected version.
-          for i in 1 2 3; do
-            git rebase --abort 2>/dev/null || true
-            if git pull --rebase -X ours --autostash origin "${GITHUB_REF_NAME}" && git push; then
-              exit 0
+
+          START=$(date +%s)
+          BUDGET=$((5 * 3600 + 1800))     # 5.5 hours
+
+          collect_and_push() {
+            python3 snapshot.py || { echo "collector failed this pass"; return 0; }
+            if [ -z "$(git status --porcelain data)" ]; then
+              echo "no change to commit"
+              return 0
             fi
-            echo "push attempt $i failed, retrying"
-            sleep 5
+            git add data -- ":!*.tmp"
+            git commit -m "ladder snapshot $(date -u +'%Y-%m-%dT%H:%MZ')"
+            for i in 1 2 3; do
+              git rebase --abort 2>/dev/null || true
+              if git pull --rebase -X ours --autostash origin "$BRANCH" && git push; then
+                return 0
+              fi
+              echo "push attempt $i failed, retrying"
+              sleep 5
+            done
+            git rebase --abort 2>/dev/null || true
+            echo "could not push this pass; will try again next hour"
+            return 0
+          }
+
+          # Collect immediately, then once per hour until the budget runs out.
+          while : ; do
+            echo "=== pass at $(date -u +'%Y-%m-%dT%H:%M:%SZ') ==="
+            collect_and_push
+            ELAPSED=$(( $(date +%s) - START ))
+            REMAIN=$(( BUDGET - ELAPSED ))
+            [ "$REMAIN" -lt 3600 ] && { echo "budget spent; exiting cleanly"; break; }
+            # Sleep to the top of the next hour so snapshots land on a tidy grid
+            # and line up with the API's own hourly recompute.
+            SLEEP=$(( 3600 - ($(date +%s) % 3600) ))
+            [ "$SLEEP" -lt 60 ] && SLEEP=$((SLEEP + 3600))
+            echo "sleeping ${SLEEP}s until the next hour"
+            sleep "$SLEEP"
           done
-          git rebase --abort 2>/dev/null || true
-          exit 1
+          echo "RAN_SECONDS=$(( $(date +%s) - START ))" >> "$GITHUB_ENV"
+
+      # Start the next run before this one ends, so collection continues without
+      # anyone pressing a button. GitHub deliberately refuses to let the built-in
+      # GITHUB_TOKEN trigger another workflow (it would allow infinite loops), so
+      # this needs a personal access token in the RELAY_TOKEN secret. Without that
+      # secret the step does nothing and the cron schedule remains the only
+      # trigger - the workflow still works, it just is not self-sustaining.
+      - name: Re-arm the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.RELAY_TOKEN }}
+          RAN_SECONDS: ${{ env.RAN_SECONDS }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "No RELAY_TOKEN secret set - not re-arming. Add one to make this self-sustaining."
+            exit 0
+          fi
+          # Guard against a crash loop: if this run died in under 30 minutes,
+          # something is wrong, and re-arming would spawn runs back to back.
+          if [ "${RAN_SECONDS:-0}" -lt 1800 ]; then
+            echo "Run lasted ${RAN_SECONDS:-0}s (<30 min) - not re-arming, to avoid a crash loop."
+            exit 0
+          fi
+          echo "Re-arming: dispatching the next run."
+          gh workflow run snapshot.yml --ref "${GITHUB_REF_NAME}" \
+            || echo "Re-arm failed; the cron schedule is the fallback."
