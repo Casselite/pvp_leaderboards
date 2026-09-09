@@ -653,7 +653,16 @@ async function buildDetail(row){
   box.appendChild(el("p","note","Loading recorded history…"));
   let doc=null;
   try{
-    const r=await fetch("data/players/"+encodeURIComponent(row.name)+".json",{cache:"no-cache"});
+    // The collector names each file encodeURIComponent(name).json, so a player
+    // called "Aeon Drift.8961" is stored on disk as the literal filename
+    // "Aeon%20Drift.8961.json". Encoding once here produces the URL
+    // .../Aeon%20Drift.8961.json, which the server decodes back to a space and
+    // then cannot find. The percent itself has to be escaped too, so the path
+    // segment is encoded twice: %20 -> %2520. Names without spaces or specials
+    // were unaffected, which is why this looked like "history works for some
+    // players and not others" rather than a flat failure.
+    const file=encodeURIComponent(encodeURIComponent(row.name))+".json";
+    const r=await fetch("data/players/"+file,{cache:"no-cache"});
     if(r.ok)doc=await r.json();
   }catch(e){}
   box.innerHTML="";
@@ -675,14 +684,20 @@ async function buildDetail(row){
   .forEach(([k,v])=>{const d=el("div");d.appendChild(el("span","dk",k));d.appendChild(el("span","dv",v));sum.appendChild(d);});
   box.appendChild(sum);
 
+  // Every interval where ANYTHING moved earns a row: games played, rating, or
+  // rank. Rank alone matters — a player who sat out an hour still slides down as
+  // others qualify, and that passive drift is most of what happens early in a
+  // season. Filtering on games>0 hid it and made a working history look empty.
   const iv=[];
   for(let i=1;i<pts.length;i++){
     const a=pts[i-1],b=pts[i];
     const dw=(b[3]??0)-(a[3]??0),dl=(b[4]??0)-(a[4]??0);
-    if(dw+dl<=0)continue;
-    iv.push({to:b[0],w:dw,l:dl,dr:(b[2]??0)-(a[2]??0),from:a[1],rank:b[1]});
+    const dr=(b[2]??0)-(a[2]??0);
+    const moved=(a[1]!=null&&b[1]!=null&&a[1]!==b[1]);
+    if(dw+dl<=0&&dr===0&&!moved)continue;
+    iv.push({to:b[0],w:dw,l:dl,dr:dr,from:a[1],rank:b[1],played:dw+dl>0});
   }
-  if(!iv.length){box.appendChild(el("p","note","No games played between any two readings yet."));return box;}
+  if(!iv.length){box.appendChild(el("p","note","Nothing has changed for this account between readings yet — same rating, same rank, no games."));return box;}
   const t=el("table","dtable");
   t.innerHTML=`<thead><tr><th>When</th><th class="n">W</th><th class="n">L</th>
     <th class="n">Rating</th><th class="n">Rank</th></tr></thead>`;
@@ -690,8 +705,8 @@ async function buildDetail(row){
   iv.slice().reverse().slice(0,40).forEach(v=>{
     const tr=el("tr");
     tr.appendChild(el("td","num",new Date(v.to).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})));
-    tr.appendChild(el("td","n num",String(v.w)));
-    tr.appendChild(el("td","n num",String(v.l)));
+    tr.appendChild(el("td","n num",v.played?String(v.w):"—"));
+    tr.appendChild(el("td","n num",v.played?String(v.l):"—"));
     const dr=el("td","n num");dr.textContent=(v.dr>0?"+":"")+v.dr;
     if(v.dr>0)dr.style.color="var(--pos)";else if(v.dr<0)dr.style.color="var(--neg)";
     tr.appendChild(dr);
@@ -699,7 +714,8 @@ async function buildDetail(row){
     rk.textContent=(v.from!=null&&v.rank!=null&&v.from!==v.rank)?`${v.from} → ${v.rank}`:String(v.rank??"—");
     tr.appendChild(rk);tb.appendChild(tr);});
   t.appendChild(tb);box.appendChild(t);
-  if(iv.length>40)box.appendChild(el("p","note",`Showing the 40 most recent of ${iv.length} sessions.`));
+  if(iv.length>40)box.appendChild(el("p","note",`Showing the 40 most recent of ${iv.length} changes.`));
+  box.appendChild(el("p","note","A row with — for W/L is passive movement: no games played, the rank shifted because other accounts qualified or dropped."));
   return box;
 }
 
