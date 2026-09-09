@@ -248,10 +248,26 @@ function scoreMap(s){
     const n=String(x.name||"").toLowerCase(); if(n)m[n]=x.id;});
   return m;
 }
-async function loadBoard(id,region){
+/* The board comes from disk, not from the API, and that is deliberate.
+
+   The na/eu segment in the ladder URL is ignored upstream: the API serves the
+   board of whichever region the CALLER sits in. Verified by requesting the same
+   URL from two places seconds apart - Europe got 166 entries, the US got 102,
+   with not one name in common. So a page that fetched the ladder itself showed
+   every visitor their own region's roster while the recorded history belonged to
+   the collector's region, and no player row could ever find its own history.
+
+   Reading the collector's stored board fixes that: everyone sees the same board,
+   it always matches the history beside it, and the official API gets one request
+   per hour from one machine instead of one per visitor per page load. The cost
+   is that the board is up to an hour old, which is what an hourly tracker is. */
+/* Still used by the Past seasons tab only. Those boards are final and are not
+   collected hourly, so they are fetched live - which means they show the caller's
+   own region, same as everything else this endpoint returns. Labelled as such
+   on that tab rather than pretended away. */
+async function loadLiveBoard(id,region){
   // Paginate by page size, NOT by the X-Result-Total header: that header is not
-  // CORS-safelisted, so cross-origin JavaScript cannot read it and it comes back
-  // null in the browser. Stop on the first short page instead.
+  // CORS-safelisted, so cross-origin JavaScript reads it as null.
   const SIZE=200; let all=[];
   for(let p=0;p<4;p++){
     const {data}=await jget(
@@ -261,6 +277,16 @@ async function loadBoard(id,region){
     if(data.length<SIZE)break;
   }
   return {rows:all,total:all.length};
+}
+
+async function loadStoredBoard(region){
+  try{
+    const r=await fetch(`data/board_${region}.json`,{cache:"no-cache"});
+    if(!r.ok) return null;
+    const b=await r.json();
+    if(!b||!Array.isArray(b.rows)) return null;
+    return b;
+  }catch(e){ return null; }
 }
 function shape(rows,m){
   const g=(e,k)=>{const id=m[k];if(!id)return null;const s=(e.scores||[]).find(x=>x.id===id);return s?Number(s.value):null;};
@@ -439,7 +465,7 @@ function ladderView(){
 
 function ladderTable(board,agg){
   const wrap=el("div","tablewrap"),head=el("div","thead");
-  head.appendChild(el("h2",null,`Top ${board.rows.length} · ${S.identical?"Global":S.region.toUpperCase()}`));
+  head.appendChild(el("h2",null,`Top ${board.rows.length} · ${S.region.toUpperCase()}`));
   const inp=el("input","search");inp.type="search";inp.placeholder="Filter by account name…";
   inp.setAttribute("aria-label","Filter by account name");head.appendChild(inp);wrap.appendChild(head);
   const sc=el("div","scroll"),t=el("table");
@@ -607,7 +633,7 @@ async function loadSeasons(btn,out){
       let rec=null;
       try{rec=JSON.parse(localStorage.getItem(key)||"null");}catch(e){rec=null;}
       if(!rec){
-        const b=await loadBoard(s.id,"na");
+        const b=await loadLiveBoard(s.id,"na");
         const r=shape(b.rows,scoreMap(s));
         const rat=r.map(x=>x.rating).filter(n=>n!=null).sort((a,b)=>a-b);
         rec={name:s.name,start:s.start,end:s.end,count:r.length,
@@ -662,7 +688,7 @@ async function buildDetail(row){
     // were unaffected, which is why this looked like "history works for some
     // players and not others" rather than a flat failure.
     const file=encodeURIComponent(encodeURIComponent(row.name))+".json";
-    const r=await fetch("data/players/"+file,{cache:"no-cache"});
+    const r=await fetch("data/players/"+S.region+"/"+file,{cache:"no-cache"});
     if(r.ok)doc=await r.json();
   }catch(e){}
   box.innerHTML="";
@@ -753,46 +779,63 @@ function setRegion(r){
 
 async function boot(){
   $("#view").innerHTML='<div class="state"><p>Loading the ladder…</p></div>';
-  // History is optional: the live board must render even if the collector
-  // has not committed anything yet.
-  fetch(HISTORY_URL,{cache:"no-cache"}).then(r=>r.ok?r.json():null).then(h=>{
-    S.hist=h;
-    if(h&&h.updated){
-      $("#histfoot").textContent="History last collected "+new Date(h.updated).toLocaleString()
-        +" · "+fmt(h.regions?.na?.snapshots||0)+" snapshots recorded.";
+  // Both the history and the board are static files in this repo now, so they
+  // are awaited together rather than raced. The old code fired history off in
+  // the background because the board took three chained cross-origin API calls
+  // to arrive; it no longer does, and the season's tier ladder now lives in the
+  // history file, so rendering before it lands would mislabel every rating.
+  try{
+    S.hist=await fetch(HISTORY_URL,{cache:"no-cache"}).then(r=>r.ok?r.json():null);
+  }catch(e){ S.hist=null; }
+  if(S.hist){
+    S.tiers=Array.isArray(S.hist.tiers)?S.hist.tiers.slice().sort((a,b)=>a.ceil-b.ceil):[];
+    if(S.hist.updated){
+      $("#histfoot").textContent="History last collected "+new Date(S.hist.updated).toLocaleString()
+        +" · "+fmt(S.hist.regions?.[S.region]?.snapshots||0)+" snapshots recorded.";
     }
-    // Two guards. Only render once the board has actually arrived - this static
-    // file usually beats three chained cross-origin API calls, and rendering
-    // early painted "No one has qualified yet" over a board that was still
-    // loading. And re-render for Population too, not just Ladder: it is the tab
-    // that consumes this data.
-    if(S.boards[S.region] && S.tab!=="seasons") render();
-  }).catch(()=>{});
+  }
 
   try{
-    const season=await resolveSeason();
-    S.season=season;S.tiers=tiersFrom(season);
-    const m=scoreMap(season);
-    $("#sname").textContent=season.name||"Unknown season";
-    const fd=d=>d?new Date(d).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):"—";
-    $("#sdates").textContent=`${fd(season.start)} → ${fd(season.end)}`;
-    if(season.active)$("#sdot").classList.remove("off");
+    const [na,eu]=await Promise.all([loadStoredBoard("na"),loadStoredBoard("eu")]);
+    const found={};
+    if(na)found.na=na; if(eu)found.eu=eu;
+    const regions=Object.keys(found);
+    if(!regions.length){
+      const s=el("div","state");
+      s.appendChild(el("h2",null,"No board collected yet"));
+      s.appendChild(el("p",null,"The collector has not written a board file yet. It runs hourly, so the first one appears within the hour."));
+      $("#view").innerHTML="";$("#view").appendChild(s);
+      return;
+    }
+    S.boards={};
+    regions.forEach(r=>{S.boards[r]={rows:found[r].rows,collectedAt:found[r].collectedAt};});
+    if(!S.boards[S.region])S.region=regions[0];
 
-    const [na,eu]=await Promise.all([loadBoard(season.id,"na"),loadBoard(season.id,"eu")]);
-    S.boards.na={rows:shape(na.rows,m)};S.boards.eu={rows:shape(eu.rows,m)};
-    S.identical=JSON.stringify(S.boards.na.rows.map(r=>r.name))===JSON.stringify(S.boards.eu.rows.map(r=>r.name));
-    // A control that visibly does nothing is worse than no control. The API
-    // serves one global board for both region values, so hide the toggle while
-    // that is true; the comparison above brings it back automatically if it ever changes.
-    $("#regionseg").classList.toggle("hidden",S.identical);
-    $("#regionnote").innerHTML=S.identical
-      ?"<b>One global ladder.</b> The API accepts <code>na</code> and <code>eu</code> but returns identical boards for both, and entries carry no region field \u2014 so there is nothing to split. If ArenaNet ever separates them the toggle returns on its own."
-      :"NA and EU are returning different boards \u2014 showing them separately.";
+    const b0=found[S.region];
+    S.season={id:b0.seasonId,name:b0.seasonName};
+    $("#sname").textContent=b0.seasonName||"Unknown season";
+    const fd=d=>d?new Date(d).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):"—";
+    if(S.hist){
+      $("#sdates").textContent=fd(S.hist.start)+" → "+fd(S.hist.end);
+      $("#sdot").classList.remove("off");
+    }
+
+    // Only offer a region the collector actually covers. A second collector in
+    // the other region simply drops its own board file into the repo and the
+    // toggle appears by itself - nothing here needs changing.
+    $("#regionseg").classList.toggle("hidden",regions.length<2);
+    ["na","eu"].forEach(r=>{const btn=$("#btn-"+r);if(btn)btn.classList.toggle("hidden",!found[r]);});
+    $("#regionnote").innerHTML=regions.length>1
+      ?"NA and EU are collected separately, each by a machine sitting in that region."
+      :"<b>Only the "+regions[0].toUpperCase()+" board is collected right now.</b> The ladder API ignores the "
+       +"<code>na</code>/<code>eu</code> in the URL and returns the board for wherever the caller is, so one "
+       +"collector can only ever record its own region. A second collector running in the other region makes "
+       +"this toggle appear.";
     render();
-    setInterval(refresh,15*60*1000);   // API caches an hour; this only keeps an idle tab current
+    setInterval(refresh,10*60*1000);   // the collector writes hourly; this picks up the new file
   }catch(e){
     const s=el("div","state err");
-    s.appendChild(el("h2",null,"Could not reach the Guild Wars 2 API"));
+    s.appendChild(el("h2",null,"Could not load the collected board"));
     s.appendChild(el("p",null,String(e&&e.message||e)));
     $("#view").innerHTML="";$("#view").appendChild(s);
   }
@@ -806,9 +849,17 @@ async function refresh(){
     const busy=document.querySelector("tr.detailrow")
       || (document.querySelector(".search")&&document.querySelector(".search").value.trim());
     if(busy)return;
-    const m=scoreMap(S.season);
-    const [na,eu]=await Promise.all([loadBoard(S.season.id,"na"),loadBoard(S.season.id,"eu")]);
-    S.boards.na={rows:shape(na.rows,m)};S.boards.eu={rows:shape(eu.rows,m)};
+    const [na,eu,h]=await Promise.all([
+      loadStoredBoard("na"),loadStoredBoard("eu"),
+      fetch(HISTORY_URL,{cache:"no-cache"}).then(r=>r.ok?r.json():null).catch(()=>null)]);
+    if(na)S.boards.na={rows:na.rows,collectedAt:na.collectedAt};
+    if(eu)S.boards.eu={rows:eu.rows,collectedAt:eu.collectedAt};
+    if(h){
+      S.hist=h;
+      if(Array.isArray(h.tiers))S.tiers=h.tiers.slice().sort((a,b)=>a.ceil-b.ceil);
+      if(h.updated)$("#histfoot").textContent="History last collected "+new Date(h.updated).toLocaleString()
+        +" · "+fmt(h.regions?.[S.region]?.snapshots||0)+" snapshots recorded.";
+    }
     if(S.tab!=="seasons")render();
   }catch(e){/* keep showing the last good board */}
 }
