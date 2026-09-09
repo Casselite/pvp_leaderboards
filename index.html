@@ -120,9 +120,6 @@
   .pill{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
     padding:2px 6px;border-radius:2px;white-space:nowrap}
   .p-new{background:var(--accent-soft);color:var(--accent-ink)}
-  .p-risk{background:var(--warn-soft);color:var(--warn)}
-  .p-short{background:var(--neg-soft);color:var(--neg)}
-  .p-ok{background:var(--surface-2);color:var(--muted)}
 
   .state{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:40px 28px;text-align:center;box-shadow:var(--shadow)}
   .state h2{font-size:20px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em}
@@ -145,20 +142,6 @@
   table.dtable{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:3px}
   table.dtable thead th{background:var(--surface)}
   tbody tr.click:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-  .overlay{position:fixed;inset:0;background:rgba(10,14,16,.55);display:flex;align-items:flex-start;
-    justify-content:center;padding:36px 16px;overflow-y:auto;z-index:50}
-  .sheet{background:var(--bg);border:1px solid var(--line);border-radius:4px;width:100%;max-width:860px;
-    box-shadow:0 24px 60px -20px rgba(0,0,0,.5)}
-  .sheethead{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;
-    padding:18px 22px;border-bottom:1px solid var(--line)}
-  .sheethead h2{margin:0;font-size:20px;font-family:"JetBrains Mono",monospace;font-weight:500;letter-spacing:0}
-  .sheethead .sub{margin:4px 0 0;color:var(--muted);font-size:13.5px}
-  .xbtn{background:none;border:1px solid var(--line);color:var(--muted);border-radius:3px;
-    font-size:15px;line-height:1;padding:6px 10px;cursor:pointer}
-  .xbtn:hover{color:var(--ink)}
-  .xbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-  .sheetbody{padding:18px 22px 22px}
-  .sheetbody .panels{margin-bottom:0}
   footer{margin-top:34px;color:var(--muted);font-size:13px;max-width:80ch}
   footer a{color:var(--accent-ink)}
 </style>
@@ -207,6 +190,10 @@ const WEEKLY_MATCH_STEP=15;          // each week of an active season adds 15 to
 const $=s=>document.querySelector(s);
 const el=(t,c,x)=>{const n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n;};
 const fmt=n=>(n==null||!isFinite(n))?"—":Number(n).toLocaleString();
+// "2026-09-09" parses as UTC midnight, which formats as the previous day
+// anywhere west of Greenwich. Build a local date from the parts instead.
+const dayLabel=(key,opts)=>{const[y,m,d]=key.split("-").map(Number);
+  return new Date(y,m-1,d).toLocaleDateString(undefined,opts||{month:"short",day:"numeric"});};
 const pct=n=>(n==null||!isFinite(n))?"—":n.toFixed(1)+"%";
 const S={tab:"ladder",region:"na",season:null,tiers:[],boards:{},hist:null,identical:false,seasons:null};
 
@@ -269,24 +256,14 @@ function shape(rows,m){
    Games per day since the player joined the board. Uses only the live entry
    (join date + cumulative games), so it works with zero collected history. */
 function pace(r){
-  if(!r.date||r.games==null)return null;
-  const days=(Date.now()-new Date(r.date))/864e5;
-  if(!(days>0.15))return null;          // too new to mean anything
+  // r.games is cumulative for the WHOLE season; r.date is only when the account
+  // entered the top 250. Dividing one by the other gave 800 games/day for anyone
+  // who ground below the cut and then broke in. The season start is the only
+  // denominator that matches the numerator.
+  if(r.games==null||!S.season?.start)return null;
+  const days=(Date.now()-new Date(S.season.start))/864e5;
+  if(!(days>0.5))return null;
   return r.games/days;
-}
-
-/* ---------- eligibility ---------- */
-function eligibility(){
-  if(!S.season||!S.season.start) return null;
-  const start=new Date(S.season.start), end=S.season.end?new Date(S.season.end):null;
-  const now=new Date();
-  const weeksElapsed=Math.floor((now-start)/(7*864e5));
-  const week=Math.max(1,weeksElapsed+1);
-  const totalWeeks=end?Math.max(1,Math.round((end-start)/(7*864e5))):null;
-  const nextChange=new Date(start.getTime()+week*7*864e5);
-  return {week,totalWeeks,required:week*WEEKLY_MATCH_STEP,
-    next:(week+1)*WEEKLY_MATCH_STEP,nextChange,
-    finalRequired:totalWeeks?totalWeeks*WEEKLY_MATCH_STEP:null};
 }
 
 /* ---------- stats ---------- */
@@ -336,9 +313,13 @@ function everChart(series){
   const lb=add("text",{x:xs(last)-8,y:ys(last.ever)-10,"text-anchor":"end",fill:"var(--ink)","font-size":13,
     "font-family":"Oswald, sans-serif"});lb.textContent=fmt(last.ever);
   const days=[...new Set(pts.map(p=>p.t.slice(0,10)))];
-  days.forEach(day=>{const p=pts.find(x=>x.t.slice(0,10)===day);
+  // Thin the labels: one per day becomes an unreadable smear over a 12-week season.
+  const stride=Math.max(1,Math.ceil(days.length/8));
+  days.forEach((day,i)=>{
+    if(i%stride && i!==days.length-1)return;
+    const p=pts.find(x=>x.t.slice(0,10)===day);
     add("text",{x:xs(p),y:H-10,"text-anchor":"middle",fill:"var(--muted)","font-size":11})
-      .textContent=new Date(day).toLocaleDateString(undefined,{month:"short",day:"numeric"});});
+      .textContent=dayLabel(day);});
   box.appendChild(svg);
   const tip=el("div","tip");box.appendChild(tip);
   const hit=add("rect",{x:ML,y:MT,width:W-ML-MR,height:H-MT-MB,fill:"transparent"});
@@ -452,15 +433,27 @@ function ladderTable(board,agg){
     const pd=pace(r);
     tr.appendChild(el("td","n num",pd==null?"—":pd.toFixed(1)));
     tr.classList.add("click");
-    tr.tabIndex=0; tr.setAttribute("role","button");
-    tr.setAttribute("aria-label","Show history for "+r.name);
+    // Deliberately NOT role="button": that would override the implicit row role
+    // and detach all nine cells from their column headers for screen readers.
+    tr.tabIndex=0;
+    tr.setAttribute("aria-expanded","false");
+    tr.setAttribute("aria-label","Show recorded history for "+r.name);
     const open=()=>toggleRow(tr,r,9);
     tr.addEventListener("click",open);
     tr.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});
     tb.appendChild(tr);});
   t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
-  inp.addEventListener("input",()=>{const q=inp.value.trim().toLowerCase();
-    tb.querySelectorAll("tr").forEach(tr=>{tr.hidden=q&&!tr.dataset.name.includes(q);});});
+  // Only the account rows carry data-name. querySelectorAll("tr") also matches
+  // an injected detail row and every row of the nested session table, which have
+  // no dataset.name - that threw and killed the filter for the rest of the page.
+  inp.addEventListener("input",()=>{
+    const q=inp.value.trim().toLowerCase();
+    tb.querySelectorAll("tr[data-name]").forEach(tr=>{
+      const hide=!!q&&!tr.dataset.name.includes(q);
+      tr.hidden=hide;
+      const d=tr.nextElementSibling;
+      if(d&&d.classList.contains("detailrow"))d.hidden=hide;   // keep the pair together
+    });});
   return wrap;
 }
 
@@ -527,7 +520,7 @@ function populationView(){
   const tb=el("tbody");
   days.slice().reverse().forEach(d=>{
     const tr=el("tr");
-    tr.appendChild(el("td","num",new Date(d.d).toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"})));
+    tr.appendChild(el("td","num",dayLabel(d.d,{weekday:"short",month:"short",day:"numeric"})));
     tr.appendChild(el("td","n num",fmt(d.new)));
     tr.appendChild(el("td","n num",fmt(d.gone)));
     const net=el("td","n num");const nv=d.new-d.gone;
@@ -580,7 +573,9 @@ async function loadSeasons(btn,out){
           top:r[0]?r[0].rating:null,topName:r[0]?r[0].name:null,
           cut:rat.length?rat[0]:null,med:rat.length?rat[Math.floor(rat.length/2)]:null,
           games:r.reduce((a,x)=>a+(x.games||0),0)};
-        try{localStorage.setItem(key,JSON.stringify(rec));}catch(e){}
+        // Only cache a real result. An empty board (API no longer serving an old
+        // season) would otherwise be cached permanently with no way to recover.
+        if(rec.count>0){try{localStorage.setItem(key,JSON.stringify(rec));}catch(e){}}
       }
       rowsOut.push(rec);
       btn.textContent=`Loading… ${rowsOut.length}/${fives.length}`;
@@ -669,16 +664,18 @@ async function buildDetail(row){
 
 async function toggleRow(tr,row,cols){
   const nxt=tr.nextElementSibling;
-  if(nxt&&nxt.classList.contains("detailrow")){nxt.remove();tr.classList.remove("open");return;}
+  if(nxt&&nxt.classList.contains("detailrow")){
+    nxt.remove();tr.classList.remove("open");tr.setAttribute("aria-expanded","false");return;}
   tr.parentNode.querySelectorAll("tr.detailrow").forEach(n=>n.remove());
-  tr.parentNode.querySelectorAll("tr.open").forEach(n=>n.classList.remove("open"));
-  tr.classList.add("open");
+  tr.parentNode.querySelectorAll("tr.open").forEach(n=>{
+    n.classList.remove("open");n.setAttribute("aria-expanded","false");});
+  tr.classList.add("open");tr.setAttribute("aria-expanded","true");
   const dr=el("tr","detailrow"),td=el("td");
   td.colSpan=cols;dr.appendChild(td);tr.after(dr);
   td.appendChild(await buildDetail(row));
 }
 
-/* ---------- shell ---------- *//* ---------- shell ---------- */
+/* ---------- shell ---------- */
 function render(){
   const v=$("#view");v.innerHTML="";
   $("#regionbar").classList.toggle("hidden",S.tab==="seasons");
@@ -707,7 +704,12 @@ async function boot(){
       $("#histfoot").textContent="History last collected "+new Date(h.updated).toLocaleString()
         +" · "+fmt(h.regions?.na?.snapshots||0)+" snapshots recorded.";
     }
-    if(S.tab==="ladder")render();
+    // Two guards. Only render once the board has actually arrived - this static
+    // file usually beats three chained cross-origin API calls, and rendering
+    // early painted "No one has qualified yet" over a board that was still
+    // loading. And re-render for Population too, not just Ladder: it is the tab
+    // that consumes this data.
+    if(S.boards[S.region] && S.tab!=="seasons") render();
   }).catch(()=>{});
 
   try{
@@ -730,7 +732,7 @@ async function boot(){
       ?"<b>One global ladder.</b> The API accepts <code>na</code> and <code>eu</code> but returns identical boards for both, and entries carry no region field \u2014 so there is nothing to split. If ArenaNet ever separates them the toggle returns on its own."
       :"NA and EU are returning different boards \u2014 showing them separately.";
     render();
-    setInterval(refresh,15*60*1000);   // API caches an hour; this is just to keep an open tab current
+    setInterval(refresh,15*60*1000);   // API caches an hour; this only keeps an idle tab current
   }catch(e){
     const s=el("div","state err");
     s.appendChild(el("h2",null,"Could not reach the Guild Wars 2 API"));
@@ -741,6 +743,12 @@ async function boot(){
 async function refresh(){
   try{
     if(!S.season)return;
+    // Never yank the view out from under someone. render() rebuilds from
+    // scratch, which would collapse an open player row, clear the filter and
+    // reset the scroll position mid-read.
+    const busy=document.querySelector("tr.detailrow")
+      || (document.querySelector(".search")&&document.querySelector(".search").value.trim());
+    if(busy)return;
     const m=scoreMap(S.season);
     const [na,eu]=await Promise.all([loadBoard(S.season.id,"na"),loadBoard(S.season.id,"eu")]);
     S.boards.na={rows:shape(na.rows,m)};S.boards.eu={rows:shape(eu.rows,m)};
