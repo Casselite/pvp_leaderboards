@@ -22,14 +22,13 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      # v7 runs on Node 24. There is deliberately no setup-python step:
+      # ubuntu-latest already ships Python 3 and snapshot.py uses only the
+      # standard library, so that is one less action to keep up to date.
+      - uses: actions/checkout@v7
 
       - name: Fetch ladder and update history
-        run: python snapshot.py
+        run: python3 snapshot.py
 
       - name: Commit if anything changed
         run: |
