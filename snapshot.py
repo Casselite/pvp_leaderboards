@@ -20,6 +20,8 @@ import json
 import os
 import sys
 import time
+import http.client
+import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,8 +47,15 @@ def fetch(path, tries=4):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=30) as r:
-                return json.loads(r.read().decode("utf-8")), dict(r.headers)
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as e:
+                # Lower-case the keys: dict() on an HTTPMessage loses its
+                # case-insensitivity, and HTTP/2 always sends lower-case names,
+                # which would silently turn X-Result-Total into 0.
+                hdrs = {k.lower(): v for k, v in r.headers.items()}
+                return json.loads(r.read().decode("utf-8")), hdrs
+        # OSError covers connection resets and incomplete reads mid-body, which
+        # URLError does not - those must be retried, not fatal.
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError,
+                TimeoutError, ValueError, http.client.HTTPException) as e:
             last = e
             if attempt < tries - 1:
                 time.sleep(2 * (attempt + 1))
@@ -78,18 +87,35 @@ def scoring_ids(season):
 
 
 def board(season_id, region):
-    rows, total = [], 0
+    """Fetch the whole board, bypassing any CDN edge cache.
+
+    The API sets Cache-Control: max-age=3600, and edges hold their own copies of
+    differing ages. A snapshot served from a stale edge would silently miss every
+    player who was only on the board during that window - and "distinct players
+    ever" can never recover a player it never saw. The cache-buster costs one
+    origin request per region per hour, which is nothing against that risk.
+    The upstream Date is logged so a stale read is visible rather than silent.
+    """
+    rows, total, served = [], 0, None
+    bust = int(time.time())
     for page in range(2):                       # 250 entries = 2 pages of 200
-        data, headers = fetch("/pvp/seasons/%s/leaderboards/ladder/%s?page=%d&page_size=200"
-                              % (season_id, region, page))
+        data, headers = fetch(
+            "/pvp/seasons/%s/leaderboards/ladder/%s?page=%d&page_size=200&_cb=%d"
+            % (season_id, region, page, bust))
         if page == 0:
-            total = int(headers.get("X-Result-Total", 0) or 0)
+            total = int(headers.get("x-result-total", 0) or 0)
+            served = headers.get("date")
         if not isinstance(data, list) or not data:
             break
         rows.extend(data)
-        if len(rows) >= total:
+        if len(data) < 200:          # short page = last page, regardless of header
             break
-    return rows, total
+    if total and len(rows) != total:
+        # Better to skip an hour than to record a truncated board as if it were
+        # the real one - a short board is indistinguishable from mass churn.
+        raise RuntimeError("incomplete board for %s: got %d of %d"
+                           % (region, len(rows), total))
+    return rows, total, served
 
 
 def shape(rows, smap):
@@ -209,7 +235,7 @@ def update_player_files(rows, iso, season_id):
         if not name:
             continue
         path = os.path.join(PLAYER_DIR, slug(name) + ".json")
-        doc = load(path)
+        doc = load_optional(path)
         if not doc or doc.get("seasonId") != season_id:
             doc = {"name": name, "seasonId": season_id, "points": []}
         pts = doc["points"]
@@ -233,10 +259,24 @@ def update_player_files(rows, iso, season_id):
 
 
 def load(path):
+    """None if the file does not exist. Raises if it exists but cannot be parsed.
+
+    Collapsing those two cases is how accumulated history gets silently replaced
+    by a blank aggregate: a single corrupt byte would otherwise look exactly like
+    a first run. Callers that can tolerate a missing file use load_optional().
+    """
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_optional(path):
+    """For per-player files, where losing one file is not worth failing the run."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (IOError, OSError, ValueError):
+        return load(path)
+    except (IOError, OSError, ValueError) as e:
+        print("   ...unreadable, starting fresh: %s (%s)" % (path, e))
         return None
 
 
@@ -250,22 +290,49 @@ def save(path, obj):
 
 def main():
     season = active_season()
+    if not season.get("active"):
+        # Between seasons the API still serves the finished board. Recording it
+        # hourly would inflate every "times seen" count and paint a perfectly
+        # stable ladder that nobody is playing.
+        print("no active season (latest: %s). Nothing to record." % season.get("name"))
+        return 0
     smap = scoring_ids(season)
     iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     print("season: %s (%s)  active=%s" % (season.get("name"), season["id"], season.get("active")))
 
-    boards = {}
+    boards, failed = {}, []
     for region in REGIONS:
-        rows, total = board(season["id"], region)
+        try:
+            rows, total, served = board(season["id"], region)
+        except RuntimeError as e:
+            # The two regions are the same global ladder, so losing one is not
+            # worth losing the hour. Record what we got and carry on.
+            print("  %s: FETCH FAILED (%s)" % (region, e))
+            failed.append(region)
+            continue
         boards[region] = shape(rows, smap)
-        print("  %s: %d entries (X-Result-Total %s)" % (region, len(rows), total))
+        print("  %s: %d entries (X-Result-Total %s) upstream Date: %s"
+              % (region, len(rows), total, served))
+    if len(failed) == len(REGIONS):
+        raise RuntimeError("every region failed; leaving history untouched")
 
     hist = load(HISTORY)
 
     # Season rollover: archive the finished season, start a clean one.
     if hist and hist.get("seasonId") and hist["seasonId"] != season["id"]:
-        old = os.path.join(ARCHIVE_DIR, "%s.json" % hist["seasonId"])
+        old_id = hist["seasonId"]
+        old = os.path.join(ARCHIVE_DIR, "%s.json" % old_id)
         save(old, hist)
+        # Move the per-player files too. update_player_files() resets any file
+        # whose seasonId does not match, so leaving them in place would delete a
+        # whole season of rating history the first time each player reappeared.
+        if os.path.isdir(PLAYER_DIR):
+            dest = os.path.join(ARCHIVE_DIR, old_id, "players")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            if os.path.exists(dest):
+                shutil.rmtree(dest)
+            shutil.move(PLAYER_DIR, dest)
+            print("archived %d player files -> %s" % (len(os.listdir(dest)), dest))
         print("archived previous season -> %s" % old)
         hist = None
 
@@ -285,6 +352,8 @@ def main():
 
     changed = False
     for region in REGIONS:
+        if region not in boards:
+            continue                      # fetch failed; leave this region alone
         rows = boards[region]
         if not rows:
             # Empty board is normal at season start, but it is also what a
