@@ -511,19 +511,26 @@ function populationView(){
   const today=new Date().toISOString().slice(0,10);
   const byDay={};
   series.forEach(p=>{const d=(p.t||"").slice(0,10);if(!d)return;
-    byDay[d]=byDay[d]||{d,new:0,gone:0,stab:[],ever:null,c:null};
-    byDay[d].new+=p.new||0; byDay[d].gone+=p.gone||0;
+    byDay[d]=byDay[d]||{d,first:0,gone:0,stab:[],ever:null,c:null};
+    byDay[d].gone+=p.gone||0;
     if(p.stab!=null)byDay[d].stab.push(p.stab);
     byDay[d].ever=p.ever; byDay[d].c=p.c;});
+  // "First seen" counts each account on the day it FIRST appeared, taken from
+  // its own `f` timestamp. The series' `new` field means something different -
+  // "not on the board an hour ago" - so it counts a player again every time they
+  // drop off and climb back, and its daily total can exceed the distinct count.
+  names.forEach(n=>{const d=(players[n].f||"").slice(0,10);if(!d)return;
+    byDay[d]=byDay[d]||{d,first:0,gone:0,stab:[],ever:null,c:null};
+    byDay[d].first++;});
   const days=Object.values(byDay).sort((a,b)=>a.d.localeCompare(b.d));
-  const newToday=byDay[today]?byDay[today].new:0;
+  const newToday=byDay[today]?byDay[today].first:0;
   const lastStab=(()=>{for(let i=series.length-1;i>=0;i--)if(series[i].stab!=null)return series[i].stab;return null;})();
 
   const box=el("dl","tiles");
   [["Distinct players ever",fmt(ever),"this season"],
    ["Active core",fmt(core),"in ≥half the snapshots"],
    ["Seen only once",fmt(once),ever?pct(once/ever*100)+" of all":null],
-   ["New faces today",fmt(newToday),null],
+   ["First seen today",fmt(newToday),"never on it before"],
    ["Board stability",lastStab!=null?pct(lastStab*100):"—","vs last hour"],
    ["Currently on board",fmt(onBoard),null]]
   .forEach(([k,val,sm])=>{const d=el("div","tile"+(val==="—"?" pending":""));
@@ -541,21 +548,19 @@ function populationView(){
   const wrap=el("div","tablewrap");
   const head=el("div","thead");
   head.appendChild(el("h2",null,"By day"));
-  head.appendChild(el("p","note",`${fmt(snaps)} snapshots recorded.`));
+  head.appendChild(el("p","note",`${fmt(snaps)} snapshots. "First seen" counts an account once, on the day it first appeared; "left the board" counts departures between snapshots, so someone who returns can appear there more than once.`));
   wrap.appendChild(head);
   const sc=el("div","scroll"),t=el("table");
-  t.innerHTML=`<thead><tr><th>Day</th><th class="n">New faces</th><th class="n">Dropped off</th>
-    <th class="n">Net</th><th class="n">Stability</th><th class="n">Distinct total</th></tr></thead>`;
+  t.innerHTML=`<thead><tr><th>Day</th><th class="n">First seen</th><th class="n">Left the board</th>
+    <th class="n">Stability</th><th class="n">Distinct total</th></tr></thead>`;
   const tb=el("tbody");
   days.slice().reverse().forEach(d=>{
     const tr=el("tr");
     tr.appendChild(el("td","num",dayLabel(d.d,{weekday:"short",month:"short",day:"numeric"})));
-    tr.appendChild(el("td","n num",fmt(d.new)));
+    const fs=el("td","n num",fmt(d.first||0));
+    if(d.first)fs.style.color="var(--pos)";
+    tr.appendChild(fs);
     tr.appendChild(el("td","n num",fmt(d.gone)));
-    const net=el("td","n num");const nv=d.new-d.gone;
-    net.textContent=(nv>0?"+":"")+nv;
-    if(nv>0)net.style.color="var(--pos)";else if(nv<0)net.style.color="var(--neg)";
-    tr.appendChild(net);
     const st=d.stab.length?d.stab.reduce((a,b)=>a+b,0)/d.stab.length:null;
     tr.appendChild(el("td","n num",st!=null?pct(st*100):"—"));
     tr.appendChild(el("td","n num",fmt(d.ever)));
