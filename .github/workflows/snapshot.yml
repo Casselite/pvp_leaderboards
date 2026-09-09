@@ -34,6 +34,12 @@ jobs:
       - name: Collect on the hour for ~5.5 hours
         env:
           BRANCH: ${{ github.ref_name }}
+          # Which regional board this runner actually sees. The ladder API ignores
+          # the na/eu in the URL and serves the board for the CALLER's location,
+          # so this is a label describing where the collector sits, not a request
+          # parameter. GitHub-hosted runners are in the US, so: na. A collector
+          # running in Europe sets this to eu and writes alongside this one.
+          LADDER_REGION: na
         run: |
           set -u
           git config user.name  "github-actions[bot]"
