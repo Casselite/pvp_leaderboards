@@ -186,7 +186,7 @@
   <div id="view"></div>
 
   <footer>
-    <p id="foot">Live board from the official Guild Wars 2 API. Season history collected hourly by a GitHub Actions job in this repository and read from <code>data/history.json</code> — it keeps running whether or not anyone has this page open.</p>
+    <p id="foot">Board and history are both collected hourly by a GitHub Actions job in this repository and read from <code>data/</code> — it keeps running whether or not anyone has this page open. The board is a stored snapshot rather than a live call, so everyone sees the same one and it always matches the history beside it.</p>
     <p id="histfoot"></p>
   </footer>
 </div>
@@ -285,6 +285,11 @@ async function loadStoredBoard(region){
     if(!r.ok) return null;
     const b=await r.json();
     if(!b||!Array.isArray(b.rows)) return null;
+    // Win rate is derived, not stored - the collector keeps only what the API
+    // gives (wins, losses) so the file stays small and nothing can go stale.
+    // shape() used to add this on the way in from the API; the stored board
+    // skips shape(), which is why every Win % cell read "—" until this line.
+    b.rows.forEach(r=>{r.wr=r.games?(r.wins/r.games)*100:null;});
     return b;
   }catch(e){ return null; }
 }
