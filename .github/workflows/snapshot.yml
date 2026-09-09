@@ -38,12 +38,20 @@ jobs:
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data
+          git add data -- ":!*.tmp"
           git commit -m "ladder snapshot $(date -u +'%Y-%m-%dT%H:%MZ')"
-          # Another run may have pushed while this one worked; rebase and retry.
+          # Someone else may have pushed while this run worked. These files are
+          # single-line JSON rewritten wholesale, so a competing change to data/
+          # conflicts every time - and a conflicted rebase left in progress makes
+          # every later attempt fail instantly with "unmerged files". Abort any
+          # in-progress rebase first, and keep our freshly collected version.
           for i in 1 2 3; do
-            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" && git push && exit 0
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X ours --autostash origin "${GITHUB_REF_NAME}" && git push; then
+              exit 0
+            fi
             echo "push attempt $i failed, retrying"
             sleep 5
           done
+          git rebase --abort 2>/dev/null || true
           exit 1
