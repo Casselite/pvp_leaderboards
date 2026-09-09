@@ -342,9 +342,10 @@ function tiles(board,agg){
   const box=el("dl","tiles");
   [["On the board",st?fmt(st.count):"0",st?null:"awaiting placements"],
    ["Rating #1",st?fmt(st.top.rating):"—",null],
-   ["Cut for top 250",st?fmt(st.cut250):"—",null],
+   [st&&st.count<250?"Lowest on board":"Cut for top 250",st?fmt(st.cut250):"—",
+    st&&st.count<250?"board not full":null],
    ["Median rating",st?fmt(st.medRating):"—",null],
-   ["Spread",st?fmt(st.spread):"—",st?"rank 1 to 250":null],
+   ["Spread",st?fmt(st.spread):"—",st?`rank 1 to ${st.count}`:null],
    ["Distinct players",ever!=null?fmt(ever):"—","this season"]]
   .forEach(([k,v,s])=>{const d=el("div","tile"+(v==="—"||v==="0"?" pending":""));
     d.appendChild(el("dt",null,k));const dd=el("dd",null,v);
@@ -370,7 +371,8 @@ function ladderView(){
   p2.appendChild(el("p","sub","Rating needed to hold each position right now."));
   const r2=el("div","rows");
   [["Rank 1",st.top.rating],["Top 10",st.cut10],["Top 25",st.cut25],["Top 100",st.cut100],
-   ["Top 250 (cut line)",st.cut250],["Lead of #1 over #2",st.gap!=null?(st.gap>0?"+":"")+fmt(st.gap):"—"],
+   [st.count<250?`Lowest of ${st.count} on the board`:"Top 250 (cut line)",st.cut250],
+   ["Lead of #1 over #2",st.gap!=null?(st.gap>0?"+":"")+fmt(st.gap):"—"],
    ["Spread across the board",st.spread]]
    .forEach(([k,val])=>{const r=el("div","row");r.appendChild(el("span","k",k));
      r.appendChild(el("span","v",typeof val==="string"?val:fmt(val)));r2.appendChild(r);});
@@ -388,16 +390,27 @@ function ladderView(){
 
   const p4=el("div","panel");p4.appendChild(el("h2",null,"Roster churn"));
   if(agg&&agg.players&&(agg.snapshots||0)>1){
-    const now=board.rows.map(r=>r.name),ever=Object.keys(agg.players);
-    const gone=ever.filter(n=>!now.includes(n)),once=ever.filter(n=>(agg.players[n].n||0)<=1);
+    // Everything here comes from the collector's OWN last snapshot, never from
+    // the live board. Mixing the two produced impossible output - "currently on
+    // it: 13" against "players ever: 5" - because the history lags the API by up
+    // to an hour.
+    const roster=(agg.current||[]).map(r=>r.name);
+    const ever=Object.keys(agg.players);
+    const gone=ever.filter(n=>!roster.includes(n));
+    const once=ever.filter(n=>(agg.players[n].n||0)<=1);
+    const lagged=board.rows.length!==roster.length;
     p4.appendChild(el("p","sub",`From ${fmt(agg.snapshots)} snapshots since ${new Date(agg.firstAt).toLocaleDateString()}.`));
     const r4=el("div","rows");
-    [["Players ever on the board",fmt(ever.length)],["Currently on it",fmt(now.length)],
-     ["Been on and dropped off",fmt(gone.length)],["Seen in only one snapshot",fmt(once.length)],
-     ["Turnover",pct(ever.length?(gone.length/ever.length)*100:0)]]
+    [["Players ever on the board",fmt(ever.length)],
+     ["On it at the last snapshot",fmt(roster.length)],
+     ["Been on and dropped off",fmt(gone.length)],
+     ["Seen in only one snapshot",fmt(once.length)],
+     ["Turnover",ever.length?pct((gone.length/ever.length)*100):"—"]]
      .forEach(([k,val])=>{const r=el("div","row");r.appendChild(el("span","k",k));
        r.appendChild(el("span","v",val));r4.appendChild(r);});
     p4.appendChild(r4);
+    if(lagged)p4.appendChild(el("p","note",
+      `The live board above shows ${fmt(board.rows.length)}; the last snapshot caught ${fmt(roster.length)}. The collector runs hourly, so these numbers trail the ladder.`));
   }else{
     p4.appendChild(el("p","sub","Needs at least two hourly snapshots."));
     p4.appendChild(el("p","note","Counts everyone who has ever appeared in the top 250 this season, and how many dropped out again. The collector runs hourly, so this fills in on its own."));
@@ -413,15 +426,22 @@ function ladderTable(board,agg){
   const inp=el("input","search");inp.type="search";inp.placeholder="Filter by account name…";
   inp.setAttribute("aria-label","Filter by account name");head.appendChild(inp);wrap.appendChild(head);
   const sc=el("div","scroll"),t=el("table");
+  // pace() needs at least half a day of season to avoid absurd extrapolations,
+  // so early on the column would be nothing but dashes. Hide it until it works.
+  const showPace=board.rows.some(r=>pace(r)!=null);
+  const cols=showPace?9:8;
   t.innerHTML=`<thead><tr><th>#</th><th>Account</th><th class="n">Rating</th><th>Tier</th>
     <th class="n">W</th><th class="n">L</th><th class="n">Games</th><th class="n">Win&nbsp;%</th>
-    <th class="n">Games/day</th></tr></thead>`;
+    ${showPace?'<th class="n">Games/day</th>':''}</tr></thead>`;
   const tb=el("tbody");
   board.rows.forEach(r=>{
     const tr=el("tr");tr.dataset.name=String(r.name).toLowerCase();
     tr.appendChild(el("td","rk num"+(r.rank<=3?" top":""),String(r.rank)));
     const nm=el("td","nm");nm.appendChild(document.createTextNode(r.name));
-    if(agg&&(agg.snapshots||0)>1&&!agg.players?.[r.name]){
+    // Only meaningful once history covers the whole current board; otherwise
+    // every row is "new" simply because the collector has not caught up.
+    const rosterN=(agg?.current||[]).length;
+    if(agg&&(agg.snapshots||0)>1&&rosterN>=board.rows.length&&!agg.players?.[r.name]){
       const b=el("span","pill p-new","new");b.style.marginLeft="7px";nm.appendChild(b);}
     tr.appendChild(nm);
     tr.appendChild(el("td","rt n num",fmt(r.rating)));
@@ -430,15 +450,14 @@ function ladderTable(board,agg){
     tr.appendChild(el("td","n num",fmt(r.losses)));
     tr.appendChild(el("td","n num",fmt(r.games)));
     tr.appendChild(el("td","n num wr"+(r.wr>=55?" hi":r.wr!=null&&r.wr<45?" lo":""),pct(r.wr)));
-    const pd=pace(r);
-    tr.appendChild(el("td","n num",pd==null?"—":pd.toFixed(1)));
+    if(showPace){const pd=pace(r);tr.appendChild(el("td","n num",pd==null?"—":pd.toFixed(1)));}
     tr.classList.add("click");
     // Deliberately NOT role="button": that would override the implicit row role
     // and detach all nine cells from their column headers for screen readers.
     tr.tabIndex=0;
     tr.setAttribute("aria-expanded","false");
     tr.setAttribute("aria-label","Show recorded history for "+r.name);
-    const open=()=>toggleRow(tr,r,9);
+    const open=()=>toggleRow(tr,r,cols);
     tr.addEventListener("click",open);
     tr.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});
     tb.appendChild(tr);});
