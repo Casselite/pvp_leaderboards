@@ -135,6 +135,22 @@
   .btn:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
   .hidden{display:none!important}
 
+  tbody tr.click{cursor:pointer}
+  tbody tr.click:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .overlay{position:fixed;inset:0;background:rgba(10,14,16,.55);display:flex;align-items:flex-start;
+    justify-content:center;padding:36px 16px;overflow-y:auto;z-index:50}
+  .sheet{background:var(--bg);border:1px solid var(--line);border-radius:4px;width:100%;max-width:860px;
+    box-shadow:0 24px 60px -20px rgba(0,0,0,.5)}
+  .sheethead{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;
+    padding:18px 22px;border-bottom:1px solid var(--line)}
+  .sheethead h2{margin:0;font-size:20px;font-family:"JetBrains Mono",monospace;font-weight:500;letter-spacing:0}
+  .sheethead .sub{margin:4px 0 0;color:var(--muted);font-size:13.5px}
+  .xbtn{background:none;border:1px solid var(--line);color:var(--muted);border-radius:3px;
+    font-size:15px;line-height:1;padding:6px 10px;cursor:pointer}
+  .xbtn:hover{color:var(--ink)}
+  .xbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .sheetbody{padding:18px 22px 22px}
+  .sheetbody .panels{margin-bottom:0}
   footer{margin-top:34px;color:var(--muted);font-size:13px;max-width:80ch}
   footer a{color:var(--accent-ink)}
 </style>
@@ -159,7 +175,7 @@
   </nav>
 
   <div class="bar" id="regionbar">
-    <div class="seg" role="group" aria-label="Region">
+    <div class="seg" id="regionseg" role="group" aria-label="Region">
       <button id="btn-na" aria-pressed="true">NA</button>
       <button id="btn-eu" aria-pressed="false">EU</button>
     </div>
@@ -207,10 +223,15 @@ async function resolveSeason(){
   return d[0];
 }
 function tiersFrom(s){
-  return (s.ranks||[]).map(r=>({name:r.name,ceil:(r.tiers||[]).slice(-1)[0]?.rating}))
-    .filter(t=>t.ceil!=null).sort((a,b)=>a.ceil-b.ceil);
+  // Each rank carries three tiers with their own rating ceilings, so a rating
+  // resolves to "Gold 2", not just "Gold".
+  const out=[];
+  (s.ranks||[]).forEach(r=>{(r.tiers||[]).forEach((t,i)=>{
+    if(t&&t.rating!=null) out.push({name:`${r.name} ${i+1}`,ceil:t.rating});});});
+  return out.sort((a,b)=>a.ceil-b.ceil);
 }
-const tierOf=v=>{for(const t of S.tiers){if(v<=t.ceil)return t.name;} return S.tiers.slice(-1)[0]?.name||"—";};
+const tierOf=v=>{if(v==null)return"—";for(const t of S.tiers){if(v<=t.ceil)return t.name;}
+  return S.tiers.slice(-1)[0]?.name||"—";};
 function scoreMap(s){
   const m={};((s.leaderboards||{}).ladder||{}).scorings?.forEach(x=>{
     const n=String(x.name||"").toLowerCase(); if(n)m[n]=x.id;});
@@ -234,6 +255,16 @@ function shape(rows,m){
   return rows.map(e=>{const w=g(e,"wins"),l=g(e,"losses"),games=(w==null&&l==null)?null:(w||0)+(l||0);
     return{name:e.name,rank:e.rank,date:e.date,rating:g(e,"rating"),wins:w,losses:l,games,
       wr:games?(w/games)*100:null};}).sort((a,b)=>a.rank-b.rank);
+}
+
+/* ---------- pace ----------
+   Games per day since the player joined the board. Uses only the live entry
+   (join date + cumulative games), so it works with zero collected history. */
+function pace(r){
+  if(!r.date||r.games==null)return null;
+  const days=(Date.now()-new Date(r.date))/864e5;
+  if(!(days>0.15))return null;          // too new to mean anything
+  return r.games/days;
 }
 
 /* ---------- eligibility ---------- */
@@ -268,47 +299,57 @@ function stats(rows){
     bestWr:rows.filter(r=>r.games>=20).sort((a,b)=>(b.wr||0)-(a.wr||0))[0]};
 }
 
-/* ---------- chart ---------- */
-function curve(rows){
+/* ---------- chart ----------
+   A histogram, not the old rank curve. Rating sorted by rank is monotonically
+   decreasing by construction, so that chart looked identical on every ladder in
+   every season and said nothing the cutoff numbers did not already say. How many
+   players sit in each rating band actually changes shape as a season moves. */
+function distribution(rows){
   const box=el("div","chartbox");
-  const pts=rows.filter(r=>r.rating!=null);
-  if(pts.length<2){box.appendChild(el("p","note","Not enough entries yet to plot a curve."));return box;}
-  const W=980,H=250,ML=52,MR=18,MT=14,MB=28;
-  const NS="http://www.w3.org/2000/svg";
+  const vals=rows.map(r=>r.rating).filter(v=>v!=null);
+  if(vals.length<2){box.appendChild(el("p","note","Not enough entries yet to show a distribution."));return box;}
+  const BAND=25;
+  const lo=Math.floor(Math.min(...vals)/BAND)*BAND, hi=Math.ceil(Math.max(...vals)/BAND)*BAND;
+  const nb=Math.max(1,Math.round((hi-lo)/BAND));
+  const bins=Array.from({length:nb},(_,i)=>({lo:lo+i*BAND,hi:lo+(i+1)*BAND,n:0}));
+  vals.forEach(v=>{const i=Math.min(nb-1,Math.floor((v-lo)/BAND));bins[i].n++;});
+  const maxN=Math.max(...bins.map(b=>b.n));
+  const W=980,H=250,ML=46,MR=18,MT=16,MB=34,NS="http://www.w3.org/2000/svg";
   const svg=document.createElementNS(NS,"svg");
   svg.setAttribute("viewBox",`0 0 ${W} ${H}`);svg.setAttribute("class","chart");svg.setAttribute("role","img");
-  svg.setAttribute("aria-label",`Rating by rank from ${pts[0].rating} at rank 1 down to ${pts[pts.length-1].rating} at rank ${pts[pts.length-1].rank}`);
+  svg.setAttribute("aria-label",`Rating distribution across ${vals.length} players from ${lo} to ${hi}`);
   const add=(t,a)=>{const n=document.createElementNS(NS,t);for(const k in a)n.setAttribute(k,a[k]);svg.appendChild(n);return n;};
-  const xs=r=>ML+((r.rank-1)/Math.max(1,pts.length-1))*(W-ML-MR);
-  const lo=Math.min(...pts.map(p=>p.rating)),hi=Math.max(...pts.map(p=>p.rating));
-  const pad=Math.max(10,(hi-lo)*.08),y0=lo-pad,y1=hi+pad;
-  const ys=v=>MT+(1-(v-y0)/(y1-y0))*(H-MT-MB);
-  for(let i=0;i<=4;i++){const v=y0+(y1-y0)*(i/4),y=ys(v);
+  const bw=(W-ML-MR)/nb, ys=n=>MT+(1-n/maxN)*(H-MT-MB);
+  for(let i=0;i<=4;i++){const v=Math.round(maxN*i/4),y=ys(v);
     add("line",{x1:ML,x2:W-MR,y1:y,y2:y,stroke:"var(--grid)","stroke-width":1});
-    add("text",{x:ML-8,y:y+4,"text-anchor":"end",fill:"var(--muted)","font-size":11}).textContent=Math.round(v);}
-  S.tiers.forEach(t=>{if(t.ceil>y0&&t.ceil<y1){const y=ys(t.ceil);
-    add("line",{x1:ML,x2:W-MR,y1:y,y2:y,stroke:"var(--muted)","stroke-width":1,"stroke-dasharray":"3 4",opacity:.6});
-    add("text",{x:W-MR-2,y:y-5,"text-anchor":"end",fill:"var(--muted)","font-size":10,"letter-spacing":".08em"})
-      .textContent=t.name.toUpperCase()+" CEILING";}});
-  let d=`M ${xs(pts[0])} ${ys(pts[0].rating)}`;
-  pts.forEach((p,i)=>{if(i)d+=` L ${xs(p)} ${ys(p.rating)}`;});
-  add("path",{d:`${d} L ${xs(pts[pts.length-1])} ${H-MB} L ${xs(pts[0])} ${H-MB} Z`,fill:"var(--chart-fill)"});
-  add("path",{d,fill:"none",stroke:"var(--chart)","stroke-width":2,"stroke-linejoin":"round"});
-  [pts[0],pts[Math.floor(pts.length/2)],pts[pts.length-1]].forEach(p=>{
-    add("text",{x:xs(p),y:H-8,"text-anchor":"middle",fill:"var(--muted)","font-size":11}).textContent="#"+p.rank;});
-  box.appendChild(svg);
-  const tip=el("div","tip");box.appendChild(tip);
-  const hit=add("rect",{x:ML,y:MT,width:W-ML-MR,height:H-MT-MB,fill:"transparent"});
-  const mk=add("circle",{r:4,fill:"var(--chart)",stroke:"var(--surface)","stroke-width":2,opacity:0});
-  hit.addEventListener("mousemove",ev=>{
-    const b=svg.getBoundingClientRect(),rel=((ev.clientX-b.left)/b.width)*W;
-    const i=Math.max(0,Math.min(pts.length-1,Math.round(((rel-ML)/(W-ML-MR))*(pts.length-1))));
-    const p=pts[i];mk.setAttribute("cx",xs(p));mk.setAttribute("cy",ys(p.rating));mk.setAttribute("opacity",1);
-    tip.innerHTML=`<b>#${p.rank}</b> ${p.name}<br>${fmt(p.rating)} rating · ${fmt(p.games)} games`;
-    tip.style.opacity=1;
-    tip.style.left=Math.min(b.width-tip.offsetWidth-6,Math.max(0,(xs(p)/W)*b.width-tip.offsetWidth/2))+"px";
-    tip.style.top=((ys(p.rating)/H)*b.height-tip.offsetHeight-10)+"px";});
-  hit.addEventListener("mouseleave",()=>{tip.style.opacity=0;mk.setAttribute("opacity",0);});
+    add("text",{x:ML-8,y:y+4,"text-anchor":"end",fill:"var(--muted)","font-size":11}).textContent=v;}
+  const tip=el("div","tip");
+  bins.forEach((b,i)=>{
+    if(!b.n)return;
+    const x=ML+i*bw, h=(H-MB)-ys(b.n);
+    const r=add("rect",{x:x+1,y:ys(b.n),width:Math.max(1,bw-2),height:Math.max(1,h),
+      fill:"var(--chart)",rx:2,ry:2});
+    r.addEventListener("mouseenter",ev=>{
+      const bb=svg.getBoundingClientRect();
+      tip.innerHTML=`<b>${b.lo}\u2013${b.hi}</b><br>${b.n} player${b.n===1?"":"s"}`;
+      tip.style.opacity=1;
+      tip.style.left=Math.min(bb.width-tip.offsetWidth-6,Math.max(0,((x+bw/2)/W)*bb.width-tip.offsetWidth/2))+"px";
+      tip.style.top=((ys(b.n)/H)*bb.height-tip.offsetHeight-8)+"px";});
+    r.addEventListener("mouseleave",()=>{tip.style.opacity=0;});});
+  // Rank ceilings, drawn after the bars so they sit on top rather than behind them.
+  S.tiers.forEach(t=>{if(t.ceil>lo&&t.ceil<hi&&/ 3$/.test(t.name)){
+    const x=ML+((t.ceil-lo)/(hi-lo))*(W-ML-MR);
+    add("line",{x1:x,x2:x,y1:MT,y2:H-MB,stroke:"var(--ink)","stroke-width":1,
+      "stroke-dasharray":"4 3",opacity:.55});
+    const lb=add("text",{x:x-5,y:MT+11,"text-anchor":"end",fill:"var(--ink-2)","font-size":10,
+      "letter-spacing":".08em"});
+    lb.textContent=t.name.replace(/ 3$/,"").toUpperCase();}});
+  [lo,Math.round((lo+hi)/2),hi].forEach(v=>{
+    const x=ML+((v-lo)/(hi-lo))*(W-ML-MR);
+    add("text",{x,y:H-14,"text-anchor":"middle",fill:"var(--muted)","font-size":11}).textContent=v;});
+  add("text",{x:(ML+W-MR)/2,y:H-2,"text-anchor":"middle",fill:"var(--muted)","font-size":10,"letter-spacing":".1em"})
+    .textContent="RATING";
+  box.appendChild(svg);box.appendChild(tip);
   return box;
 }
 
@@ -344,9 +385,9 @@ function ladderView(){
   }
   const st=stats(board.rows),P=el("div","panels");
   const p1=el("div","panel wide");
-  p1.appendChild(el("h2",null,"Rating by rank"));
-  p1.appendChild(el("p","sub","How steep the top is. Dashed lines are Guild Wars 2's own rank ceilings."));
-  p1.appendChild(curve(board.rows));P.appendChild(p1);
+  p1.appendChild(el("h2",null,"Rating distribution"));
+  p1.appendChild(el("p","sub","How many players sit in each 25-point band. Dashed lines mark the top of each rank."));
+  p1.appendChild(distribution(board.rows));P.appendChild(p1);
 
   const p2=el("div","panel");p2.appendChild(el("h2",null,"What it costs"));
   p2.appendChild(el("p","sub","Rating needed to hold each position right now."));
@@ -391,22 +432,21 @@ function ladderView(){
 }
 
 function ladderTable(board,agg){
-  const E=eligibility();
   const wrap=el("div","tablewrap"),head=el("div","thead");
-  head.appendChild(el("h2",null,`Top ${board.rows.length} · ${S.region.toUpperCase()}`));
+  head.appendChild(el("h2",null,`Top ${board.rows.length} · ${S.identical?"Global":S.region.toUpperCase()}`));
   const inp=el("input","search");inp.type="search";inp.placeholder="Filter by account name…";
   inp.setAttribute("aria-label","Filter by account name");head.appendChild(inp);wrap.appendChild(head);
   const sc=el("div","scroll"),t=el("table");
   t.innerHTML=`<thead><tr><th>#</th><th>Account</th><th class="n">Rating</th><th>Tier</th>
-    <th class="n">W</th><th class="n">L</th><th class="n">Games</th><th class="n">Win&nbsp;%</th><th>Joined</th></tr></thead>`;
+    <th class="n">W</th><th class="n">L</th><th class="n">Games</th><th class="n">Win&nbsp;%</th>
+    <th class="n">Games/day</th></tr></thead>`;
   const tb=el("tbody");
   board.rows.forEach(r=>{
     const tr=el("tr");tr.dataset.name=String(r.name).toLowerCase();
     tr.appendChild(el("td","rk num"+(r.rank<=3?" top":""),String(r.rank)));
     const nm=el("td","nm");nm.appendChild(document.createTextNode(r.name));
-    if(agg&&(agg.snapshots||0)>1&&!agg.players?.[r.name]){const b=el("span","pill p-new","new");b.style.marginLeft="7px";nm.appendChild(b);}
-    else if(E&&r.games!=null&&r.games<E.next){const b=el("span","pill p-risk","short "+(E.next-r.games));b.style.marginLeft="7px";
-      b.title=`Needs ${E.next} games for week ${E.week+1}`;nm.appendChild(b);}
+    if(agg&&(agg.snapshots||0)>1&&!agg.players?.[r.name]){
+      const b=el("span","pill p-new","new");b.style.marginLeft="7px";nm.appendChild(b);}
     tr.appendChild(nm);
     tr.appendChild(el("td","rt n num",fmt(r.rating)));
     const td=el("td");td.appendChild(el("span","tier",tierOf(r.rating)));tr.appendChild(td);
@@ -414,7 +454,14 @@ function ladderTable(board,agg){
     tr.appendChild(el("td","n num",fmt(r.losses)));
     tr.appendChild(el("td","n num",fmt(r.games)));
     tr.appendChild(el("td","n num wr"+(r.wr>=55?" hi":r.wr!=null&&r.wr<45?" lo":""),pct(r.wr)));
-    tr.appendChild(el("td","num",r.date?new Date(r.date).toLocaleDateString(undefined,{month:"short",day:"numeric"}):"—"));
+    const pd=pace(r);
+    tr.appendChild(el("td","n num",pd==null?"—":pd.toFixed(1)));
+    tr.classList.add("click");
+    tr.tabIndex=0; tr.setAttribute("role","button");
+    tr.setAttribute("aria-label","Show history for "+r.name);
+    const open=()=>showPlayer(r);
+    tr.addEventListener("click",open);
+    tr.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});
     tb.appendChild(tr);});
   t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
   inp.addEventListener("input",()=>{const q=inp.value.trim().toLowerCase();
@@ -423,53 +470,69 @@ function ladderTable(board,agg){
 }
 
 function eligView(){
-  const v=document.createDocumentFragment(),E=eligibility();
-  const board=S.boards[S.region];
-  if(!E){v.appendChild(el("div","state")).appendChild(el("p",null,"Season dates unavailable."));return v;}
+  const v=document.createDocumentFragment(),E=eligibility(),board=S.boards[S.region];
+  if(!E){const d=el("div","state");d.appendChild(el("p",null,"Season dates unavailable."));v.appendChild(d);return v;}
   const box=el("dl","tiles");
   [["Season week",`${E.week}${E.totalWeeks?" of "+E.totalWeeks:""}`,null],
-   ["Required now",fmt(E.required),"matches"],
-   ["Required next week",fmt(E.next),"from "+E.nextChange.toLocaleDateString(undefined,{month:"short",day:"numeric"})],
+   ["Required now",fmt(E.required),"matches played"],
+   ["Rises to",fmt(E.next),"on "+E.nextChange.toLocaleDateString(undefined,{month:"short",day:"numeric"})],
    ["By season end",E.finalRequired?fmt(E.finalRequired):"—","matches"]]
-  .forEach(([k,val,s])=>{const d=el("div","tile");d.appendChild(el("dt",null,k));
-    const dd=el("dd",null,val);if(s)dd.appendChild(el("small",null,s));d.appendChild(dd);box.appendChild(d);});
+  .forEach(([k,val,sm])=>{const d=el("div","tile");d.appendChild(el("dt",null,k));
+    const dd=el("dd",null,val);if(sm)dd.appendChild(el("small",null,sm));d.appendChild(dd);box.appendChild(d);});
   v.appendChild(box);
 
   const p=el("div","panel wide");
   p.appendChild(el("h2",null,"How eligibility works"));
-  p.appendChild(el("p","sub","Being on the board needs two things at once, and the second one keeps rising."));
-  p.appendChild(el("p","note","A player must be in the top 250 by rating AND have played enough ranked matches. Every week of an active season adds another "+WEEKLY_MATCH_STEP+" matches to that minimum. So people drop off the board for two very different reasons — losing rating, or simply not playing enough to stay eligible — and the second cause gets more common every week."));
+  p.appendChild(el("p","sub","Two conditions at once, and the second one keeps rising."));
+  p.appendChild(el("p","note","A player must be in the top 250 by rating AND have played enough ranked matches. Every week of an active season adds another "+WEEKLY_MATCH_STEP+" matches to that minimum. Anyone already on the board therefore meets today's requirement by definition \u2014 the question worth asking is whether they are playing fast enough to still meet it in a few weeks."));
   v.appendChild(p);
 
   if(!board||!board.rows.length){
-    const s=el("div","state");s.appendChild(el("h2",null,"Nobody on the board yet"));
-    s.appendChild(el("p",null,"Once players qualify, this lists who is short of next week's requirement."));
-    v.appendChild(s);return v;
+    const d=el("div","state");d.appendChild(el("h2",null,"Nobody on the board yet"));
+    d.appendChild(el("p",null,"Once players qualify, this projects who is on pace to stay eligible."));
+    v.appendChild(d);return v;
   }
-  const rows=board.rows.slice().map(r=>({...r,deficit:r.games!=null?E.next-r.games:null}))
-    .sort((a,b)=>(b.deficit??-1e9)-(a.deficit??-1e9));
-  const atRisk=rows.filter(r=>r.deficit>0);
+
+  // Project each player's games forward at the rate they have actually played,
+  // and find the first week boundary where that projection falls short.
+  const start=new Date(S.season.start);
+  const rows=board.rows.map(r=>{
+    const pd=pace(r); let failWeek=null,failDate=null;
+    if(pd!=null&&E.totalWeeks){
+      for(let w=E.week+1;w<=E.totalWeeks;w++){
+        const when=new Date(start.getTime()+(w-1)*7*864e5);
+        const days=(when-Date.now())/864e5;
+        if(days<0)continue;
+        if((r.games||0)+pd*days < w*WEEKLY_MATCH_STEP){failWeek=w;failDate=when;break;}
+      }
+    }
+    return {...r,pd,failWeek,failDate};
+  }).sort((a,b)=>(a.failWeek??999)-(b.failWeek??999)||(a.pd??0)-(b.pd??0));
+
+  const atRisk=rows.filter(r=>r.failWeek!=null);
+  const noPace=rows.filter(r=>r.pd==null).length;
   const wrap=el("div","tablewrap"),head=el("div","thead");
-  head.appendChild(el("h2",null,`At risk for week ${E.week+1} · ${atRisk.length} of ${board.rows.length}`));
+  head.appendChild(el("h2",null,`Projected to fall short \u00b7 ${atRisk.length} of ${board.rows.length}`));
+  if(noPace)head.appendChild(el("p","note",`${noPace} too newly joined to estimate a rate.`));
   wrap.appendChild(head);
   const sc=el("div","scroll"),t=el("table");
-  t.innerHTML=`<thead><tr><th>#</th><th>Account</th><th class="n">Games</th><th class="n">Needs</th>
-    <th class="n">Short by</th><th>Status</th><th class="n">Rating</th></tr></thead>`;
+  t.innerHTML=`<thead><tr><th>#</th><th>Account</th><th class="n">Games</th><th class="n">Games/day</th>
+    <th class="n">Falls short</th><th>When</th><th class="n">Rating</th></tr></thead>`;
   const tb=el("tbody");
   (atRisk.length?atRisk:rows).forEach(r=>{
     const tr=el("tr");
     tr.appendChild(el("td","rk num",String(r.rank)));
     tr.appendChild(el("td","nm",r.name));
     tr.appendChild(el("td","n num",fmt(r.games)));
-    tr.appendChild(el("td","n num",fmt(E.next)));
-    tr.appendChild(el("td","n num",r.deficit>0?fmt(r.deficit):"—"));
-    const st=el("td");
-    st.appendChild(el("span","pill "+(r.deficit>0?"p-short":"p-ok"),r.deficit>0?"short":"clear"));
-    tr.appendChild(st);
+    tr.appendChild(el("td","n num",r.pd==null?"—":r.pd.toFixed(1)));
+    const fw=el("td","n num");
+    if(r.failWeek){fw.appendChild(el("span","pill p-short","week "+r.failWeek));}
+    else{fw.appendChild(el("span","pill p-ok",r.pd==null?"unknown":"on pace"));}
+    tr.appendChild(fw);
+    tr.appendChild(el("td","num",r.failDate?r.failDate.toLocaleDateString(undefined,{month:"short",day:"numeric"}):"—"));
     tr.appendChild(el("td","rt n num",fmt(r.rating)));
     tb.appendChild(tr);});
-  t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
-  v.appendChild(wrap);
+  t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);v.appendChild(wrap);
   return v;
 }
 
@@ -534,6 +597,116 @@ async function loadSeasons(btn,out){
   }
 }
 
+/* ---------- player detail ----------
+   Reads data/players/<encodeURIComponent(name)>.json, written hourly by the
+   collector. Consecutive points give the wins/losses delta for that interval,
+   which is the closest thing to a match log this API allows. */
+function miniChart(pts,pick,label,invert){
+  const vals=pts.map(pick).filter(v=>v!=null);
+  const box=el("div","chartbox");
+  if(vals.length<2){box.appendChild(el("p","note","Needs at least two recorded points."));return box;}
+  const W=560,H=130,ML=44,MR=12,MT=12,MB=22,NS="http://www.w3.org/2000/svg";
+  const svg=document.createElementNS(NS,"svg");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);svg.setAttribute("class","chart");
+  svg.setAttribute("role","img");svg.setAttribute("aria-label",label);
+  const add=(t,a)=>{const n=document.createElementNS(NS,t);for(const k in a)n.setAttribute(k,a[k]);svg.appendChild(n);return n;};
+  let lo=Math.min(...vals),hi=Math.max(...vals);
+  if(lo===hi){lo-=1;hi+=1;}
+  const pad=(hi-lo)*.12;lo-=pad;hi+=pad;
+  const t0=new Date(pts[0][0]).getTime(),t1=new Date(pts[pts.length-1][0]).getTime();
+  const xs=p=>ML+((new Date(p[0]).getTime()-t0)/Math.max(1,t1-t0))*(W-ML-MR);
+  const ys=v=>{const f=(v-lo)/(hi-lo);return MT+(invert?f:1-f)*(H-MT-MB);};
+  [0,.5,1].forEach(f=>{const v=lo+(hi-lo)*f,y=ys(v);
+    add("line",{x1:ML,x2:W-MR,y1:y,y2:y,stroke:"var(--grid)","stroke-width":1});
+    add("text",{x:ML-7,y:y+4,"text-anchor":"end",fill:"var(--muted)","font-size":10}).textContent=Math.round(v);});
+  const usable=pts.filter(p=>pick(p)!=null);
+  let d="";usable.forEach((p,i)=>{d+=(i?" L ":"M ")+xs(p)+" "+ys(pick(p));});
+  add("path",{d,fill:"none",stroke:"var(--chart)","stroke-width":2,"stroke-linejoin":"round"});
+  usable.forEach(p=>add("circle",{cx:xs(p),cy:ys(pick(p)),r:2.5,fill:"var(--chart)"}));
+  add("text",{x:ML,y:H-6,fill:"var(--muted)","font-size":10}).textContent=new Date(pts[0][0]).toLocaleDateString(undefined,{month:"short",day:"numeric"});
+  add("text",{x:W-MR,y:H-6,"text-anchor":"end",fill:"var(--muted)","font-size":10}).textContent=new Date(pts[pts.length-1][0]).toLocaleDateString(undefined,{month:"short",day:"numeric"});
+  box.appendChild(svg);return box;
+}
+
+async function showPlayer(row){
+  const back=el("div","overlay");
+  const card=el("div","sheet");
+  const head=el("div","sheethead");
+  const h=el("div");
+  h.appendChild(el("h2",null,row.name));
+  h.appendChild(el("p","sub",`Rank ${row.rank} \u00b7 ${fmt(row.rating)} rating \u00b7 ${tierOf(row.rating)} \u00b7 ${fmt(row.games)} games`));
+  head.appendChild(h);
+  const x=el("button","xbtn","\u2715");x.setAttribute("aria-label","Close");head.appendChild(x);
+  card.appendChild(head);
+  const body=el("div","sheetbody");card.appendChild(body);
+  body.appendChild(el("p","note","Loading recorded history\u2026"));
+  back.appendChild(card);document.body.appendChild(back);
+  const close=()=>{back.remove();document.removeEventListener("keydown",esc);};
+  const esc=e=>{if(e.key==="Escape")close();};
+  x.addEventListener("click",close);
+  back.addEventListener("click",e=>{if(e.target===back)close();});
+  document.addEventListener("keydown",esc);
+  x.focus();
+
+  let doc=null;
+  try{
+    const r=await fetch("data/players/"+encodeURIComponent(row.name)+".json",{cache:"no-cache"});
+    if(r.ok)doc=await r.json();
+  }catch(e){}
+  body.innerHTML="";
+  const pts=(doc&&Array.isArray(doc.points))?doc.points:[];
+  if(pts.length<2){
+    const st=el("div","state");
+    st.appendChild(el("h2",null,pts.length?"Only one point recorded":"No history yet"));
+    st.appendChild(el("p",null,"The collector stores a point every hour, and only started recording per-player history recently. This fills in on its own \u2014 come back in a few hours."));
+    body.appendChild(st);return;
+  }
+  const P=el("div","panels");
+  const c1=el("div","panel");c1.appendChild(el("h2",null,"Rating"));
+  c1.appendChild(miniChart(pts,p=>p[2],"Rating over time",false));P.appendChild(c1);
+  const c2=el("div","panel");c2.appendChild(el("h2",null,"Rank"));
+  c2.appendChild(el("p","sub","Lower is better, so the axis is flipped."));
+  c2.appendChild(miniChart(pts,p=>p[1],"Rank over time",true));P.appendChild(c2);
+  body.appendChild(P);
+
+  // intervals where games were actually played
+  const iv=[];
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1],b=pts[i];
+    const dw=(b[3]??0)-(a[3]??0), dl=(b[4]??0)-(a[4]??0);
+    if(dw+dl<=0)continue;
+    iv.push({from:a[0],to:b[0],w:dw,l:dl,dr:(b[2]??0)-(a[2]??0),rank:b[1],rankFrom:a[1]});
+  }
+  const wrap=el("div","tablewrap");wrap.style.marginTop="14px";
+  const th=el("div","thead");
+  th.appendChild(el("h2",null,`Play sessions \u00b7 ${iv.length}`));
+  th.appendChild(el("p","note","Each row is the change between two hourly readings."));
+  wrap.appendChild(th);
+  if(!iv.length){
+    const st=el("div","state");st.appendChild(el("p",null,"No games recorded between snapshots yet."));
+    wrap.appendChild(st);
+  }else{
+    const sc=el("div","scroll"),t=el("table");
+    t.innerHTML=`<thead><tr><th>When</th><th class="n">W</th><th class="n">L</th>
+      <th class="n">Rating</th><th class="n">Rank</th></tr></thead>`;
+    const tb=el("tbody");
+    iv.slice().reverse().forEach(v=>{
+      const tr=el("tr");
+      tr.appendChild(el("td","num",new Date(v.to).toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})));
+      tr.appendChild(el("td","n num",String(v.w)));
+      tr.appendChild(el("td","n num",String(v.l)));
+      const dr=el("td","n num");dr.textContent=(v.dr>0?"+":"")+v.dr;
+      if(v.dr>0)dr.style.color="var(--pos)";else if(v.dr<0)dr.style.color="var(--neg)";
+      tr.appendChild(dr);
+      const rk=el("td","n num");
+      rk.textContent=(v.rankFrom!=null&&v.rank!=null&&v.rankFrom!==v.rank)?`${v.rankFrom} \u2192 ${v.rank}`:String(v.rank??"—");
+      tr.appendChild(rk);
+      tb.appendChild(tr);});
+    t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
+  }
+  body.appendChild(wrap);
+}
+
 /* ---------- shell ---------- */
 function render(){
   const v=$("#view");v.innerHTML="";
@@ -578,9 +751,13 @@ async function boot(){
     const [na,eu]=await Promise.all([loadBoard(season.id,"na"),loadBoard(season.id,"eu")]);
     S.boards.na={rows:shape(na.rows,m)};S.boards.eu={rows:shape(eu.rows,m)};
     S.identical=JSON.stringify(S.boards.na.rows.map(r=>r.name))===JSON.stringify(S.boards.eu.rows.map(r=>r.name));
+    // A control that visibly does nothing is worse than no control. The API
+    // serves one global board for both region values, so hide the toggle while
+    // that is true; the comparison above brings it back automatically if it ever changes.
+    $("#regionseg").classList.toggle("hidden",S.identical);
     $("#regionnote").innerHTML=S.identical
-      ?"<b>NA and EU are returning the same board.</b> The API accepts both regions but currently serves one global ladder; the toggle stays so a future split shows up on its own."
-      :"NA and EU are returning different boards — shown separately.";
+      ?"<b>One global ladder.</b> The API accepts <code>na</code> and <code>eu</code> but returns identical boards for both, and entries carry no region field \u2014 so there is nothing to split. If ArenaNet ever separates them the toggle returns on its own."
+      :"NA and EU are returning different boards \u2014 showing them separately.";
     render();
     setInterval(refresh,15*60*1000);   // API caches an hour; this is just to keep an open tab current
   }catch(e){
