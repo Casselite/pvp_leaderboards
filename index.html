@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GW2 5v5 Ladder</title>
+<meta name="description" content="Live top-250 Guild Wars 2 ranked 5v5 ladder with season-long history.">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Source+Sans+3:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --bg:#F5F6F7; --surface:#FFFFFF; --surface-2:#ECEFF1;
+    --ink:#14181B; --ink-2:#3D474E; --muted:#6B7780; --line:#DBE1E5;
+    --accent:#2D6E8E; --accent-soft:#DCEAF1; --accent-ink:#1E5A78;
+    --pos:#2E7D5B; --warn:#8A6410; --warn-soft:#F7F0DF; --neg:#A8443A; --neg-soft:#F7E9E6;
+    --chart:#2D6E8E; --chart-fill:rgba(45,110,142,.14); --grid:#E4E9ED;
+    --shadow:0 1px 2px rgba(20,24,27,.05),0 10px 28px -18px rgba(20,24,27,.3);
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#0E1215; --surface:#161C20; --surface-2:#1D252A;
+      --ink:#E8EDF0; --ink-2:#BCC7CE; --muted:#8595A0; --line:#28333A;
+      --accent:#5AAECF; --accent-soft:#16303D; --accent-ink:#8ACBE5;
+      --pos:#5DBE92; --warn:#D6A73F; --warn-soft:#2A2314; --neg:#E08076; --neg-soft:#2B1A17;
+      --chart:#5AAECF; --chart-fill:rgba(90,174,207,.18); --grid:#222C33;
+      --shadow:0 1px 2px rgba(0,0,0,.45),0 10px 28px -18px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0E1215; --surface:#161C20; --surface-2:#1D252A;
+    --ink:#E8EDF0; --ink-2:#BCC7CE; --muted:#8595A0; --line:#28333A;
+    --accent:#5AAECF; --accent-soft:#16303D; --accent-ink:#8ACBE5;
+    --pos:#5DBE92; --warn:#D6A73F; --warn-soft:#2A2314; --neg:#E08076; --neg-soft:#2B1A17;
+    --chart:#5AAECF; --chart-fill:rgba(90,174,207,.18); --grid:#222C33;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 10px 28px -18px rgba(0,0,0,.9);
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);margin:0;
+    font-family:"Source Sans 3",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:30px 20px 80px}
+  .num{font-variant-numeric:tabular-nums}
+  h1,h2,h3{font-family:Oswald,"Arial Narrow",sans-serif;font-weight:500;letter-spacing:.01em}
+  code{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.86em;background:var(--surface-2);padding:1px 5px;border-radius:2px}
+
+  header{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;
+    border-bottom:2px solid var(--ink);padding-bottom:14px;margin-bottom:20px}
+  .brand h1{font-size:clamp(26px,3.6vw,38px);margin:0;line-height:1.05;text-transform:uppercase;letter-spacing:.02em}
+  .brand p{margin:4px 0 0;color:var(--muted);font-size:14px}
+  .chip{display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--line);
+    border-radius:3px;padding:8px 13px;box-shadow:var(--shadow)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--pos);flex:none}
+  .dot.off{background:var(--muted)}
+  .chip b{font-family:Oswald,sans-serif;font-weight:500;font-size:15px;display:block}
+  .chip span{color:var(--muted);font-size:12.5px;display:block;line-height:1.3}
+
+  nav{display:flex;gap:2px;background:var(--surface-2);border:1px solid var(--line);border-radius:3px;
+    padding:2px;margin-bottom:8px;flex-wrap:wrap}
+  nav button{font-family:Oswald,sans-serif;font-size:14px;letter-spacing:.06em;text-transform:uppercase;
+    background:none;border:0;color:var(--muted);padding:8px 16px;border-radius:2px;cursor:pointer}
+  nav button[aria-selected="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+  nav button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  .bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:14px 0 16px}
+  .seg{display:inline-flex;background:var(--surface-2);border:1px solid var(--line);border-radius:3px;padding:2px}
+  .seg button{font-family:Oswald,sans-serif;font-size:13.5px;letter-spacing:.06em;text-transform:uppercase;
+    background:none;border:0;color:var(--muted);padding:6px 16px;border-radius:2px;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+  .note{color:var(--muted);font-size:13.5px;max-width:64ch;margin:0}
+  .note b{color:var(--ink-2)}
+
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:3px;overflow:hidden;margin-bottom:20px}
+  .tile{background:var(--surface);padding:13px 15px}
+  .tile dt{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 5px;
+    font-family:"JetBrains Mono",monospace}
+  .tile dd{margin:0;font-family:Oswald,sans-serif;font-weight:500;font-size:26px;line-height:1.05;font-variant-numeric:tabular-nums}
+  .tile dd small{font-size:12px;color:var(--muted);font-weight:400;font-family:"Source Sans 3",sans-serif;margin-left:5px}
+  .tile.pending dd{color:var(--muted)}
+
+  .panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:16px;margin-bottom:20px}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:17px 19px;box-shadow:var(--shadow)}
+  .panel.wide{grid-column:1/-1}
+  .panel h2{font-size:16px;margin:0 0 3px;text-transform:uppercase;letter-spacing:.05em}
+  .panel .sub{color:var(--muted);font-size:13px;margin:0 0 13px}
+  .rows{display:flex;flex-direction:column;gap:9px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:14.5px}
+  .row .k{color:var(--ink-2)}
+  .row .v{font-family:Oswald,sans-serif;font-weight:500;font-size:17px;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .row .v.mut{color:var(--muted);font-size:13.5px;font-family:"Source Sans 3",sans-serif;font-weight:400}
+
+  .chartbox{position:relative}
+  svg.chart{display:block;width:100%;height:auto;overflow:visible}
+  .tip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--line);
+    border-radius:3px;padding:7px 10px;font-size:13px;box-shadow:var(--shadow);opacity:0;transition:opacity .1s;white-space:nowrap;z-index:5}
+  .tip b{font-family:Oswald,sans-serif;font-weight:500}
+
+  .tablewrap{background:var(--surface);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow);overflow:hidden}
+  .thead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 17px;border-bottom:1px solid var(--line)}
+  .thead h2{font-size:16px;margin:0;text-transform:uppercase;letter-spacing:.05em}
+  .search{font:inherit;font-size:14px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink);
+    border-radius:3px;padding:6px 11px;min-width:190px}
+  .search:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .scroll{overflow-x:auto;max-height:660px;overflow-y:auto}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:760px}
+  thead th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-family:"JetBrains Mono",monospace;
+    font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:500;
+    padding:9px 13px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:2}
+  th.n,td.n{text-align:right}
+  tbody td{padding:9px 13px;border-bottom:1px solid var(--line);white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:var(--surface-2)}
+  td.rk{font-family:Oswald,sans-serif;font-weight:500;font-size:16px;color:var(--muted);width:1%}
+  td.rk.top{color:var(--accent-ink)}
+  td.nm{font-family:"JetBrains Mono",monospace;font-size:13px}
+  td.rt{font-family:Oswald,sans-serif;font-weight:500;font-size:16px}
+  .tier{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.07em;text-transform:uppercase;
+    padding:2px 6px;border-radius:2px;background:var(--surface-2);color:var(--ink-2);border:1px solid var(--line)}
+  .wr.hi{color:var(--pos)} .wr.lo{color:var(--neg)}
+  .pill{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+    padding:2px 6px;border-radius:2px;white-space:nowrap}
+  .p-new{background:var(--accent-soft);color:var(--accent-ink)}
+  .p-risk{background:var(--warn-soft);color:var(--warn)}
+  .p-short{background:var(--neg-soft);color:var(--neg)}
+  .p-ok{background:var(--surface-2);color:var(--muted)}
+
+  .state{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:40px 28px;text-align:center;box-shadow:var(--shadow)}
+  .state h2{font-size:20px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em}
+  .state p{color:var(--ink-2);margin:0 auto;max-width:58ch}
+  .state .big{font-family:Oswald,sans-serif;font-size:42px;color:var(--accent);line-height:1;margin-bottom:10px}
+  .state.err{border-left:3px solid var(--neg)}
+  .btn{font:inherit;font-family:Oswald,sans-serif;font-size:14px;letter-spacing:.05em;text-transform:uppercase;
+    background:var(--accent);color:#fff;border:0;border-radius:3px;padding:10px 20px;cursor:pointer;margin-top:14px}
+  .btn:hover{filter:brightness(1.08)} .btn:disabled{opacity:.55;cursor:default}
+  .btn:focus-visible{outline:2px solid var(--accent-ink);outline-offset:2px}
+  .hidden{display:none!important}
+
+  footer{margin-top:34px;color:var(--muted);font-size:13px;max-width:80ch}
+  footer a{color:var(--accent-ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <h1>GW2 5v5 Ladder</h1>
+      <p>Top 250 ranked ladder, recorded hourly</p>
+    </div>
+    <div class="chip">
+      <span class="dot off" id="sdot"></span>
+      <div><b id="sname">Loading…</b><span id="sdates">reading the API</span></div>
+    </div>
+  </header>
+
+  <nav role="tablist">
+    <button id="t-ladder" role="tab" aria-selected="true">Ladder</button>
+    <button id="t-elig"   role="tab" aria-selected="false">Eligibility</button>
+    <button id="t-seasons" role="tab" aria-selected="false">Past seasons</button>
+  </nav>
+
+  <div class="bar" id="regionbar">
+    <div class="seg" role="group" aria-label="Region">
+      <button id="btn-na" aria-pressed="true">NA</button>
+      <button id="btn-eu" aria-pressed="false">EU</button>
+    </div>
+    <p class="note" id="regionnote"></p>
+  </div>
+
+  <div id="view"></div>
+
+  <footer>
+    <p id="foot">Live board from the official Guild Wars 2 API. Season history collected hourly by a GitHub Actions job in this repository and read from <code>data/history.json</code> — it keeps running whether or not anyone has this page open.</p>
+    <p id="histfoot"></p>
+  </footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+const API="https://api.guildwars2.com/v2";
+const HISTORY_URL="data/history.json";
+const WEEKLY_MATCH_STEP=15;          // each week of an active season adds 15 to the minimum
+const $=s=>document.querySelector(s);
+const el=(t,c,x)=>{const n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n;};
+const fmt=n=>(n==null||!isFinite(n))?"—":Number(n).toLocaleString();
+const pct=n=>(n==null||!isFinite(n))?"—":n.toFixed(1)+"%";
+const S={tab:"ladder",region:"na",season:null,tiers:[],boards:{},hist:null,identical:false,seasons:null};
+
+async function jget(url){
+  const r=await fetch(url,{headers:{Accept:"application/json"}});
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return {data:await r.json(),total:Number(r.headers.get("X-Result-Total")||0)};
+}
+
+/* ---------- season + board ---------- */
+async function seasonList(){
+  if(S.seasons) return S.seasons;
+  const ids=(await jget(API+"/pvp/seasons")).data;
+  const objs=(await jget(API+"/pvp/seasons?lang=en&ids="+ids.slice(-20).join(","))).data;
+  S.seasons=objs; return objs;
+}
+async function resolveSeason(){
+  const objs=await seasonList();
+  const a=objs.find(s=>s.active);
+  if(a) return a;
+  const d=objs.filter(s=>s.start).sort((x,y)=>String(y.start).localeCompare(String(x.start)));
+  return d[0];
+}
+function tiersFrom(s){
+  return (s.ranks||[]).map(r=>({name:r.name,ceil:(r.tiers||[]).slice(-1)[0]?.rating}))
+    .filter(t=>t.ceil!=null).sort((a,b)=>a.ceil-b.ceil);
+}
+const tierOf=v=>{for(const t of S.tiers){if(v<=t.ceil)return t.name;} return S.tiers.slice(-1)[0]?.name||"—";};
+function scoreMap(s){
+  const m={};((s.leaderboards||{}).ladder||{}).scorings?.forEach(x=>{
+    const n=String(x.name||"").toLowerCase(); if(n)m[n]=x.id;});
+  return m;
+}
+async function loadBoard(id,region){
+  // Paginate by page size, NOT by the X-Result-Total header: that header is not
+  // CORS-safelisted, so cross-origin JavaScript cannot read it and it comes back
+  // null in the browser. Stop on the first short page instead.
+  const SIZE=200; let all=[];
+  for(let p=0;p<4;p++){
+    const {data}=await jget(`${API}/pvp/seasons/${id}/leaderboards/ladder/${region}?page=${p}&page_size=${SIZE}`);
+    if(!Array.isArray(data)||!data.length)break;
+    all=all.concat(data);
+    if(data.length<SIZE)break;
+  }
+  return {rows:all,total:all.length};
+}
+function shape(rows,m){
+  const g=(e,k)=>{const id=m[k];if(!id)return null;const s=(e.scores||[]).find(x=>x.id===id);return s?Number(s.value):null;};
+  return rows.map(e=>{const w=g(e,"wins"),l=g(e,"losses"),games=(w==null&&l==null)?null:(w||0)+(l||0);
+    return{name:e.name,rank:e.rank,date:e.date,rating:g(e,"rating"),wins:w,losses:l,games,
+      wr:games?(w/games)*100:null};}).sort((a,b)=>a.rank-b.rank);
+}
+
+/* ---------- eligibility ---------- */
+function eligibility(){
+  if(!S.season||!S.season.start) return null;
+  const start=new Date(S.season.start), end=S.season.end?new Date(S.season.end):null;
+  const now=new Date();
+  const weeksElapsed=Math.floor((now-start)/(7*864e5));
+  const week=Math.max(1,weeksElapsed+1);
+  const totalWeeks=end?Math.max(1,Math.round((end-start)/(7*864e5))):null;
+  const nextChange=new Date(start.getTime()+week*7*864e5);
+  return {week,totalWeeks,required:week*WEEKLY_MATCH_STEP,
+    next:(week+1)*WEEKLY_MATCH_STEP,nextChange,
+    finalRequired:totalWeeks?totalWeeks*WEEKLY_MATCH_STEP:null};
+}
+
+/* ---------- stats ---------- */
+function stats(rows){
+  if(!rows.length)return null;
+  const rat=rows.map(r=>r.rating).filter(n=>n!=null).sort((a,b)=>a-b);
+  const gm=rows.map(r=>r.games).filter(n=>n!=null).sort((a,b)=>a-b);
+  const q=(a,p)=>a.length?a[Math.min(a.length-1,Math.round((a.length-1)*p))]:null;
+  const at=n=>{const r=rows.find(x=>x.rank===n);return r?r.rating:null;};
+  const wrs=rows.map(r=>r.wr).filter(n=>n!=null).sort((a,b)=>a-b);
+  return{count:rows.length,top:rows[0],cut10:at(10),cut25:at(25),cut100:at(100),
+    cut250:at(250)??rat[0],medRating:q(rat,.5),medGames:q(gm,.5),
+    totalGames:rows.reduce((a,r)=>a+(r.games||0),0),
+    gap:(rows[0]&&rows[1])?rows[0].rating-rows[1].rating:null,
+    spread:rat.length?rat[rat.length-1]-rat[0]:null,
+    medWr:wrs.length?wrs[Math.floor(wrs.length/2)]:null,
+    mostGames:rows.slice().sort((a,b)=>(b.games||0)-(a.games||0))[0],
+    bestWr:rows.filter(r=>r.games>=20).sort((a,b)=>(b.wr||0)-(a.wr||0))[0]};
+}
+
+/* ---------- chart ---------- */
+function curve(rows){
+  const box=el("div","chartbox");
+  const pts=rows.filter(r=>r.rating!=null);
+  if(pts.length<2){box.appendChild(el("p","note","Not enough entries yet to plot a curve."));return box;}
+  const W=980,H=250,ML=52,MR=18,MT=14,MB=28;
+  const NS="http://www.w3.org/2000/svg";
+  const svg=document.createElementNS(NS,"svg");
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`);svg.setAttribute("class","chart");svg.setAttribute("role","img");
+  svg.setAttribute("aria-label",`Rating by rank from ${pts[0].rating} at rank 1 down to ${pts[pts.length-1].rating} at rank ${pts[pts.length-1].rank}`);
+  const add=(t,a)=>{const n=document.createElementNS(NS,t);for(const k in a)n.setAttribute(k,a[k]);svg.appendChild(n);return n;};
+  const xs=r=>ML+((r.rank-1)/Math.max(1,pts.length-1))*(W-ML-MR);
+  const lo=Math.min(...pts.map(p=>p.rating)),hi=Math.max(...pts.map(p=>p.rating));
+  const pad=Math.max(10,(hi-lo)*.08),y0=lo-pad,y1=hi+pad;
+  const ys=v=>MT+(1-(v-y0)/(y1-y0))*(H-MT-MB);
+  for(let i=0;i<=4;i++){const v=y0+(y1-y0)*(i/4),y=ys(v);
+    add("line",{x1:ML,x2:W-MR,y1:y,y2:y,stroke:"var(--grid)","stroke-width":1});
+    add("text",{x:ML-8,y:y+4,"text-anchor":"end",fill:"var(--muted)","font-size":11}).textContent=Math.round(v);}
+  S.tiers.forEach(t=>{if(t.ceil>y0&&t.ceil<y1){const y=ys(t.ceil);
+    add("line",{x1:ML,x2:W-MR,y1:y,y2:y,stroke:"var(--muted)","stroke-width":1,"stroke-dasharray":"3 4",opacity:.6});
+    add("text",{x:W-MR-2,y:y-5,"text-anchor":"end",fill:"var(--muted)","font-size":10,"letter-spacing":".08em"})
+      .textContent=t.name.toUpperCase()+" CEILING";}});
+  let d=`M ${xs(pts[0])} ${ys(pts[0].rating)}`;
+  pts.forEach((p,i)=>{if(i)d+=` L ${xs(p)} ${ys(p.rating)}`;});
+  add("path",{d:`${d} L ${xs(pts[pts.length-1])} ${H-MB} L ${xs(pts[0])} ${H-MB} Z`,fill:"var(--chart-fill)"});
+  add("path",{d,fill:"none",stroke:"var(--chart)","stroke-width":2,"stroke-linejoin":"round"});
+  [pts[0],pts[Math.floor(pts.length/2)],pts[pts.length-1]].forEach(p=>{
+    add("text",{x:xs(p),y:H-8,"text-anchor":"middle",fill:"var(--muted)","font-size":11}).textContent="#"+p.rank;});
+  box.appendChild(svg);
+  const tip=el("div","tip");box.appendChild(tip);
+  const hit=add("rect",{x:ML,y:MT,width:W-ML-MR,height:H-MT-MB,fill:"transparent"});
+  const mk=add("circle",{r:4,fill:"var(--chart)",stroke:"var(--surface)","stroke-width":2,opacity:0});
+  hit.addEventListener("mousemove",ev=>{
+    const b=svg.getBoundingClientRect(),rel=((ev.clientX-b.left)/b.width)*W;
+    const i=Math.max(0,Math.min(pts.length-1,Math.round(((rel-ML)/(W-ML-MR))*(pts.length-1))));
+    const p=pts[i];mk.setAttribute("cx",xs(p));mk.setAttribute("cy",ys(p.rating));mk.setAttribute("opacity",1);
+    tip.innerHTML=`<b>#${p.rank}</b> ${p.name}<br>${fmt(p.rating)} rating · ${fmt(p.games)} games`;
+    tip.style.opacity=1;
+    tip.style.left=Math.min(b.width-tip.offsetWidth-6,Math.max(0,(xs(p)/W)*b.width-tip.offsetWidth/2))+"px";
+    tip.style.top=((ys(p.rating)/H)*b.height-tip.offsetHeight-10)+"px";});
+  hit.addEventListener("mouseleave",()=>{tip.style.opacity=0;mk.setAttribute("opacity",0);});
+  return box;
+}
+
+/* ---------- views ---------- */
+function tiles(board,agg){
+  const st=board?stats(board.rows):null;
+  const ever=agg&&agg.players?Object.keys(agg.players).length:null;
+  const box=el("dl","tiles");
+  [["On the board",st?fmt(st.count):"0",st?null:"awaiting placements"],
+   ["Rating #1",st?fmt(st.top.rating):"—",null],
+   ["Cut for top 250",st?fmt(st.cut250):"—",null],
+   ["Median rating",st?fmt(st.medRating):"—",null],
+   ["Players ever seen",ever!=null?fmt(ever):"—",agg?fmt(agg.snapshots||0)+" snapshots":"no history yet"],
+   ["Games on board",st?fmt(st.totalGames):"—",null]]
+  .forEach(([k,v,s])=>{const d=el("div","tile"+(v==="—"||v==="0"?" pending":""));
+    d.appendChild(el("dt",null,k));const dd=el("dd",null,v);
+    if(s)dd.appendChild(el("small",null,s));d.appendChild(dd);box.appendChild(d);});
+  return box;
+}
+
+function ladderView(){
+  const v=document.createDocumentFragment();
+  const board=S.boards[S.region],agg=S.hist?.regions?.[S.region];
+  v.appendChild(tiles(board,agg));
+  if(!board||!board.rows.length){
+    const s=el("div","state");
+    const start=S.season?.start?new Date(S.season.start):null;
+    const h=start?Math.max(0,Math.round((Date.now()-start)/36e5)):null;
+    s.appendChild(el("div","big",h!=null?h+"h":"—"));
+    s.appendChild(el("h2",null,"No one has qualified yet"));
+    s.appendChild(el("p",null,`The season opened ${h!=null?h+" hour"+(h===1?"":"s")+" ago":"recently"}. Players need their placement matches finished before they appear.`));
+    v.appendChild(s);return v;
+  }
+  const st=stats(board.rows),P=el("div","panels");
+  const p1=el("div","panel wide");
+  p1.appendChild(el("h2",null,"Rating by rank"));
+  p1.appendChild(el("p","sub","How steep the top is. Dashed lines are Guild Wars 2's own rank ceilings."));
+  p1.appendChild(curve(board.rows));P.appendChild(p1);
+
+  const p2=el("div","panel");p2.appendChild(el("h2",null,"What it costs"));
+  p2.appendChild(el("p","sub","Rating needed to hold each position right now."));
+  const r2=el("div","rows");
+  [["Rank 1",st.top.rating],["Top 10",st.cut10],["Top 25",st.cut25],["Top 100",st.cut100],
+   ["Top 250 (cut line)",st.cut250],["Lead of #1 over #2",st.gap!=null?(st.gap>0?"+":"")+fmt(st.gap):"—"],
+   ["Spread across the board",st.spread]]
+   .forEach(([k,val])=>{const r=el("div","row");r.appendChild(el("span","k",k));
+     r.appendChild(el("span","v",typeof val==="string"?val:fmt(val)));r2.appendChild(r);});
+  p2.appendChild(r2);P.appendChild(p2);
+
+  const p3=el("div","panel");p3.appendChild(el("h2",null,"Activity"));
+  p3.appendChild(el("p","sub","Games played is wins plus losses — the only volume the API exposes."));
+  const r3=el("div","rows");
+  const a=[["Median games played",fmt(st.medGames)],["Median win rate",pct(st.medWr)],
+    ["Total games on board",fmt(st.totalGames)]];
+  if(st.mostGames)a.push(["Most active",`${st.mostGames.name} · ${fmt(st.mostGames.games)}`]);
+  if(st.bestWr)a.push(["Best win rate (20+ games)",`${st.bestWr.name} · ${pct(st.bestWr.wr)}`]);
+  a.forEach(([k,val])=>{const r=el("div","row");r.appendChild(el("span","k",k));
+    r.appendChild(el("span","v"+(String(val).includes("·")?" mut":""),val));r3.appendChild(r);});
+  p3.appendChild(r3);P.appendChild(p3);
+
+  const p4=el("div","panel");p4.appendChild(el("h2",null,"Roster churn"));
+  if(agg&&agg.players&&(agg.snapshots||0)>1){
+    const now=board.rows.map(r=>r.name),ever=Object.keys(agg.players);
+    const gone=ever.filter(n=>!now.includes(n)),once=ever.filter(n=>(agg.players[n].n||0)<=1);
+    p4.appendChild(el("p","sub",`From ${fmt(agg.snapshots)} snapshots since ${new Date(agg.firstAt).toLocaleDateString()}.`));
+    const r4=el("div","rows");
+    [["Players ever on the board",fmt(ever.length)],["Currently on it",fmt(now.length)],
+     ["Been on and dropped off",fmt(gone.length)],["Seen in only one snapshot",fmt(once.length)],
+     ["Turnover",pct(ever.length?(gone.length/ever.length)*100:0)]]
+     .forEach(([k,val])=>{const r=el("div","row");r.appendChild(el("span","k",k));
+       r.appendChild(el("span","v",val));r4.appendChild(r);});
+    p4.appendChild(r4);
+  }else{
+    p4.appendChild(el("p","sub","Needs at least two hourly snapshots."));
+    p4.appendChild(el("p","note","Counts everyone who has ever appeared in the top 250 this season, and how many dropped out again. The collector runs hourly, so this fills in on its own."));
+  }
+  P.appendChild(p4);v.appendChild(P);
+  v.appendChild(ladderTable(board,agg));
+  return v;
+}
+
+function ladderTable(board,agg){
+  const E=eligibility();
+  const wrap=el("div","tablewrap"),head=el("div","thead");
+  head.appendChild(el("h2",null,`Top ${board.rows.length} · ${S.region.toUpperCase()}`));
+  const inp=el("input","search");inp.type="search";inp.placeholder="Filter by account name…";
+  inp.setAttribute("aria-label","Filter by account name");head.appendChild(inp);wrap.appendChild(head);
+  const sc=el("div","scroll"),t=el("table");
+  t.innerHTML=`<thead><tr><th>#</th><th>Account</th><th class="n">Rating</th><th>Tier</th>
+    <th class="n">W</th><th class="n">L</th><th class="n">Games</th><th class="n">Win&nbsp;%</th><th>Joined</th></tr></thead>`;
+  const tb=el("tbody");
+  board.rows.forEach(r=>{
+    const tr=el("tr");tr.dataset.name=String(r.name).toLowerCase();
+    tr.appendChild(el("td","rk num"+(r.rank<=3?" top":""),String(r.rank)));
+    const nm=el("td","nm");nm.appendChild(document.createTextNode(r.name));
+    if(agg&&(agg.snapshots||0)>1&&!agg.players?.[r.name]){const b=el("span","pill p-new","new");b.style.marginLeft="7px";nm.appendChild(b);}
+    else if(E&&r.games!=null&&r.games<E.next){const b=el("span","pill p-risk","short "+(E.next-r.games));b.style.marginLeft="7px";
+      b.title=`Needs ${E.next} games for week ${E.week+1}`;nm.appendChild(b);}
+    tr.appendChild(nm);
+    tr.appendChild(el("td","rt n num",fmt(r.rating)));
+    const td=el("td");td.appendChild(el("span","tier",tierOf(r.rating)));tr.appendChild(td);
+    tr.appendChild(el("td","n num",fmt(r.wins)));
+    tr.appendChild(el("td","n num",fmt(r.losses)));
+    tr.appendChild(el("td","n num",fmt(r.games)));
+    tr.appendChild(el("td","n num wr"+(r.wr>=55?" hi":r.wr!=null&&r.wr<45?" lo":""),pct(r.wr)));
+    tr.appendChild(el("td","num",r.date?new Date(r.date).toLocaleDateString(undefined,{month:"short",day:"numeric"}):"—"));
+    tb.appendChild(tr);});
+  t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
+  inp.addEventListener("input",()=>{const q=inp.value.trim().toLowerCase();
+    tb.querySelectorAll("tr").forEach(tr=>{tr.hidden=q&&!tr.dataset.name.includes(q);});});
+  return wrap;
+}
+
+function eligView(){
+  const v=document.createDocumentFragment(),E=eligibility();
+  const board=S.boards[S.region];
+  if(!E){v.appendChild(el("div","state")).appendChild(el("p",null,"Season dates unavailable."));return v;}
+  const box=el("dl","tiles");
+  [["Season week",`${E.week}${E.totalWeeks?" of "+E.totalWeeks:""}`,null],
+   ["Required now",fmt(E.required),"matches"],
+   ["Required next week",fmt(E.next),"from "+E.nextChange.toLocaleDateString(undefined,{month:"short",day:"numeric"})],
+   ["By season end",E.finalRequired?fmt(E.finalRequired):"—","matches"]]
+  .forEach(([k,val,s])=>{const d=el("div","tile");d.appendChild(el("dt",null,k));
+    const dd=el("dd",null,val);if(s)dd.appendChild(el("small",null,s));d.appendChild(dd);box.appendChild(d);});
+  v.appendChild(box);
+
+  const p=el("div","panel wide");
+  p.appendChild(el("h2",null,"How eligibility works"));
+  p.appendChild(el("p","sub","Being on the board needs two things at once, and the second one keeps rising."));
+  p.appendChild(el("p","note","A player must be in the top 250 by rating AND have played enough ranked matches. Every week of an active season adds another "+WEEKLY_MATCH_STEP+" matches to that minimum. So people drop off the board for two very different reasons — losing rating, or simply not playing enough to stay eligible — and the second cause gets more common every week."));
+  v.appendChild(p);
+
+  if(!board||!board.rows.length){
+    const s=el("div","state");s.appendChild(el("h2",null,"Nobody on the board yet"));
+    s.appendChild(el("p",null,"Once players qualify, this lists who is short of next week's requirement."));
+    v.appendChild(s);return v;
+  }
+  const rows=board.rows.slice().map(r=>({...r,deficit:r.games!=null?E.next-r.games:null}))
+    .sort((a,b)=>(b.deficit??-1e9)-(a.deficit??-1e9));
+  const atRisk=rows.filter(r=>r.deficit>0);
+  const wrap=el("div","tablewrap"),head=el("div","thead");
+  head.appendChild(el("h2",null,`At risk for week ${E.week+1} · ${atRisk.length} of ${board.rows.length}`));
+  wrap.appendChild(head);
+  const sc=el("div","scroll"),t=el("table");
+  t.innerHTML=`<thead><tr><th>#</th><th>Account</th><th class="n">Games</th><th class="n">Needs</th>
+    <th class="n">Short by</th><th>Status</th><th class="n">Rating</th></tr></thead>`;
+  const tb=el("tbody");
+  (atRisk.length?atRisk:rows).forEach(r=>{
+    const tr=el("tr");
+    tr.appendChild(el("td","rk num",String(r.rank)));
+    tr.appendChild(el("td","nm",r.name));
+    tr.appendChild(el("td","n num",fmt(r.games)));
+    tr.appendChild(el("td","n num",fmt(E.next)));
+    tr.appendChild(el("td","n num",r.deficit>0?fmt(r.deficit):"—"));
+    const st=el("td");
+    st.appendChild(el("span","pill "+(r.deficit>0?"p-short":"p-ok"),r.deficit>0?"short":"clear"));
+    tr.appendChild(st);
+    tr.appendChild(el("td","rt n num",fmt(r.rating)));
+    tb.appendChild(tr);});
+  t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
+  v.appendChild(wrap);
+  return v;
+}
+
+function seasonsView(){
+  const v=document.createDocumentFragment();
+  const p=el("div","panel wide");
+  p.appendChild(el("h2",null,"Past seasons"));
+  p.appendChild(el("p","sub","Final standings of previous 5v5 conquest seasons, straight from the API."));
+  p.appendChild(el("p","note","Each season needs two requests per region, so this loads on demand rather than on every page view. Results are cached in your browser afterwards — finished seasons never change."));
+  const btn=el("button","btn","Load season history");btn.id="loadseasons";p.appendChild(btn);
+  const out=el("div");out.id="seasonout";p.appendChild(out);
+  v.appendChild(p);
+  btn.addEventListener("click",()=>loadSeasons(btn,out));
+  return v;
+}
+
+async function loadSeasons(btn,out){
+  btn.disabled=true;btn.textContent="Loading…";
+  out.innerHTML="";
+  try{
+    const all=await seasonList();
+    const fives=all.filter(s=>s.start&&!/2v2|3v3/i.test(s.name||"")&&!s.active)
+      .sort((a,b)=>String(b.start).localeCompare(String(a.start))).slice(0,8);
+    const rowsOut=[];
+    for(const s of fives){
+      const key="gw2season:"+s.id;
+      let rec=null;
+      try{rec=JSON.parse(localStorage.getItem(key)||"null");}catch(e){rec=null;}
+      if(!rec){
+        const b=await loadBoard(s.id,"na");
+        const r=shape(b.rows,scoreMap(s));
+        const rat=r.map(x=>x.rating).filter(n=>n!=null).sort((a,b)=>a-b);
+        rec={name:s.name,start:s.start,end:s.end,count:r.length,
+          top:r[0]?r[0].rating:null,topName:r[0]?r[0].name:null,
+          cut:rat.length?rat[0]:null,med:rat.length?rat[Math.floor(rat.length/2)]:null,
+          games:r.reduce((a,x)=>a+(x.games||0),0)};
+        try{localStorage.setItem(key,JSON.stringify(rec));}catch(e){}
+      }
+      rowsOut.push(rec);
+      btn.textContent=`Loading… ${rowsOut.length}/${fives.length}`;
+    }
+    const wrap=el("div","tablewrap");wrap.style.marginTop="16px";
+    const sc=el("div","scroll"),t=el("table");
+    t.innerHTML=`<thead><tr><th>Season</th><th>Ended</th><th class="n">On board</th>
+      <th class="n">Top rating</th><th>Held by</th><th class="n">Cut line</th><th class="n">Median</th><th class="n">Games</th></tr></thead>`;
+    const tb=el("tbody");
+    rowsOut.forEach(r=>{const tr=el("tr");
+      tr.appendChild(el("td",null,r.name));
+      tr.appendChild(el("td","num",r.end?new Date(r.end).toLocaleDateString(undefined,{month:"short",year:"numeric"}):"—"));
+      tr.appendChild(el("td","n num",fmt(r.count)));
+      tr.appendChild(el("td","rt n num",fmt(r.top)));
+      tr.appendChild(el("td","nm",r.topName||"—"));
+      tr.appendChild(el("td","n num",fmt(r.cut)));
+      tr.appendChild(el("td","n num",fmt(r.med)));
+      tr.appendChild(el("td","n num",fmt(r.games)));
+      tb.appendChild(tr);});
+    t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);out.appendChild(wrap);
+    btn.textContent="Reload";btn.disabled=false;
+  }catch(e){
+    out.appendChild(el("p","note","Could not load past seasons: "+(e.message||e)));
+    btn.textContent="Try again";btn.disabled=false;
+  }
+}
+
+/* ---------- shell ---------- */
+function render(){
+  const v=$("#view");v.innerHTML="";
+  $("#regionbar").classList.toggle("hidden",S.tab==="seasons");
+  if(S.tab==="ladder")v.appendChild(ladderView());
+  else if(S.tab==="elig")v.appendChild(eligView());
+  else v.appendChild(seasonsView());
+}
+function setTab(t){
+  S.tab=t;
+  [["ladder","#t-ladder"],["elig","#t-elig"],["seasons","#t-seasons"]]
+    .forEach(([k,sel])=>$(sel).setAttribute("aria-selected",String(k===t)));
+  render();
+}
+function setRegion(r){
+  S.region=r;$("#btn-na").setAttribute("aria-pressed",String(r==="na"));
+  $("#btn-eu").setAttribute("aria-pressed",String(r==="eu"));render();
+}
+
+async function boot(){
+  $("#view").innerHTML='<div class="state"><p>Loading the ladder…</p></div>';
+  // History is optional: the live board must render even if the collector
+  // has not committed anything yet.
+  fetch(HISTORY_URL,{cache:"no-cache"}).then(r=>r.ok?r.json():null).then(h=>{
+    S.hist=h;
+    if(h&&h.updated){
+      $("#histfoot").textContent="History last collected "+new Date(h.updated).toLocaleString()
+        +" · "+fmt(h.regions?.na?.snapshots||0)+" snapshots recorded.";
+    }
+    if(S.tab==="ladder")render();
+  }).catch(()=>{});
+
+  try{
+    const season=await resolveSeason();
+    S.season=season;S.tiers=tiersFrom(season);
+    const m=scoreMap(season);
+    $("#sname").textContent=season.name||"Unknown season";
+    const fd=d=>d?new Date(d).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):"—";
+    $("#sdates").textContent=`${fd(season.start)} → ${fd(season.end)}`;
+    if(season.active)$("#sdot").classList.remove("off");
+
+    const [na,eu]=await Promise.all([loadBoard(season.id,"na"),loadBoard(season.id,"eu")]);
+    S.boards.na={rows:shape(na.rows,m)};S.boards.eu={rows:shape(eu.rows,m)};
+    S.identical=JSON.stringify(S.boards.na.rows.map(r=>r.name))===JSON.stringify(S.boards.eu.rows.map(r=>r.name));
+    $("#regionnote").innerHTML=S.identical
+      ?"<b>NA and EU are returning the same board.</b> The API accepts both regions but currently serves one global ladder; the toggle stays so a future split shows up on its own."
+      :"NA and EU are returning different boards — shown separately.";
+    render();
+    setInterval(refresh,15*60*1000);   // API caches an hour; this is just to keep an open tab current
+  }catch(e){
+    const s=el("div","state err");
+    s.appendChild(el("h2",null,"Could not reach the Guild Wars 2 API"));
+    s.appendChild(el("p",null,String(e&&e.message||e)));
+    $("#view").innerHTML="";$("#view").appendChild(s);
+  }
+}
+async function refresh(){
+  try{
+    if(!S.season)return;
+    const m=scoreMap(S.season);
+    const [na,eu]=await Promise.all([loadBoard(S.season.id,"na"),loadBoard(S.season.id,"eu")]);
+    S.boards.na={rows:shape(na.rows,m)};S.boards.eu={rows:shape(eu.rows,m)};
+    if(S.tab!=="seasons")render();
+  }catch(e){/* keep showing the last good board */}
+}
+
+$("#t-ladder").addEventListener("click",()=>setTab("ladder"));
+$("#t-elig").addEventListener("click",()=>setTab("elig"));
+$("#t-seasons").addEventListener("click",()=>setTab("seasons"));
+$("#btn-na").addEventListener("click",()=>setRegion("na"));
+$("#btn-eu").addEventListener("click",()=>setRegion("eu"));
+boot();
+})();
+</script>
+</body>
+</html>
