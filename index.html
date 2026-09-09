@@ -95,17 +95,27 @@
     border-radius:3px;padding:7px 10px;font-size:13px;box-shadow:var(--shadow);opacity:0;transition:opacity .1s;white-space:nowrap;z-index:5}
   .tip b{font-family:Oswald,sans-serif;font-weight:500}
 
-  .tablewrap{background:var(--surface);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow);overflow:hidden}
+  /* No overflow:hidden here. It was only clipping the 3px corner radius, but it
+     also makes this a clipping context, which silently stops the sticky header
+     inside it from sticking to the viewport. */
+  .tablewrap{background:var(--surface);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow)}
   .thead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 17px;border-bottom:1px solid var(--line)}
   .thead h2{font-size:16px;margin:0;text-transform:uppercase;letter-spacing:.05em}
   .search{font:inherit;font-size:14px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink);
     border-radius:3px;padding:6px 11px;min-width:190px}
   .search:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-  .scroll{overflow-x:auto;max-height:660px;overflow-y:auto}
+  /* The table flows with the page instead of living in its own scroll box, so
+     all 250 rows are reachable by scrolling normally. overflow-x is kept only
+     on narrow screens for the horizontal case - setting overflow on either axis
+     makes the element a scroll container, which would stop the header sticking
+     to the viewport, so it is removed entirely once there is room. */
+  .scroll{overflow-x:auto}
+  @media (min-width:860px){ .scroll{overflow:visible} }
   table{border-collapse:collapse;width:100%;font-size:14px;min-width:760px}
-  thead th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-family:"JetBrains Mono",monospace;
+  thead th{position:sticky;top:0;z-index:3;background:var(--surface-2);text-align:left;font-family:"JetBrains Mono",monospace;
     font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:500;
-    padding:9px 13px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:2}
+    padding:9px 13px;border-bottom:1px solid var(--line);white-space:nowrap;
+    box-shadow:0 1px 0 var(--line)}
   th.n,td.n{text-align:right}
   tbody td{padding:9px 13px;border-bottom:1px solid var(--line);white-space:nowrap}
   tbody tr:last-child td{border-bottom:none}
