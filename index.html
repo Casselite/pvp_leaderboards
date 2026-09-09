@@ -207,8 +207,14 @@ const dayLabel=(key,opts)=>{const[y,m,d]=key.split("-").map(Number);
 const pct=n=>(n==null||!isFinite(n))?"—":n.toFixed(1)+"%";
 const S={tab:"ladder",region:"na",season:null,tiers:[],boards:{},hist:null,identical:false,seasons:null};
 
-async function jget(url){
-  const r=await fetch(url,{headers:{Accept:"application/json"}});
+// fresh=true bypasses BOTH caches in the way: the browser's own HTTP cache
+// (the API sends Cache-Control: max-age=3600, so a plain fetch happily reuses an
+// hour-old copy) and any CDN edge holding a stale body. Without this the page
+// showed 31 players while the collector, which already does this, read 60.
+async function jget(url,fresh){
+  const u=fresh?(url+(url.includes("?")?"&":"?")+"_cb="+Date.now()):url;
+  const r=await fetch(u,fresh?{headers:{Accept:"application/json"},cache:"no-store"}
+                            :{headers:{Accept:"application/json"}});
   if(!r.ok) throw new Error("HTTP "+r.status);
   return {data:await r.json(),total:Number(r.headers.get("X-Result-Total")||0)};
 }
@@ -216,8 +222,8 @@ async function jget(url){
 /* ---------- season + board ---------- */
 async function seasonList(){
   if(S.seasons) return S.seasons;
-  const ids=(await jget(API+"/pvp/seasons")).data;
-  const objs=(await jget(API+"/pvp/seasons?lang=en&ids="+ids.slice(-20).join(","))).data;
+  const ids=(await jget(API+"/pvp/seasons",true)).data;
+  const objs=(await jget(API+"/pvp/seasons?lang=en&ids="+ids.slice(-20).join(","),true)).data;
   S.seasons=objs; return objs;
 }
 async function resolveSeason(){
@@ -248,7 +254,8 @@ async function loadBoard(id,region){
   // null in the browser. Stop on the first short page instead.
   const SIZE=200; let all=[];
   for(let p=0;p<4;p++){
-    const {data}=await jget(`${API}/pvp/seasons/${id}/leaderboards/ladder/${region}?page=${p}&page_size=${SIZE}`);
+    const {data}=await jget(
+      `${API}/pvp/seasons/${id}/leaderboards/ladder/${region}?page=${p}&page_size=${SIZE}`,true);
     if(!Array.isArray(data)||!data.length)break;
     all=all.concat(data);
     if(data.length<SIZE)break;
