@@ -21,6 +21,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -29,7 +30,10 @@ REGIONS = ("na", "eu")
 DATA_DIR = "data"
 HISTORY = os.path.join(DATA_DIR, "history.json")
 ARCHIVE_DIR = os.path.join(DATA_DIR, "seasons")
+PLAYER_DIR = os.path.join(DATA_DIR, "players")
 MAX_SERIES = 4000            # ~5.5 months of hourly points
+MAX_POINTS = 4000            # per-player cap
+FORCE_POINT_AFTER_H = 6      # record a point even when nothing changed, this often
 UA = "gw2-ladder-tracker (+github actions)"
 
 
@@ -170,6 +174,49 @@ def merge(agg, rows, iso):
     return agg
 
 
+def slug(name):
+    """Filename for a player. Matches JavaScript encodeURIComponent() exactly, so
+    the page can build the same URL client-side without a lookup table."""
+    return urllib.parse.quote(name, safe="-_.!~*'()")
+
+
+def update_player_files(rows, iso, season_id):
+    """Append this snapshot to each present player's own file.
+
+    One file per player keeps a detail view to a single small request instead of
+    trawling the whole season. A point is only appended when something actually
+    changed, or every FORCE_POINT_AFTER_H hours, so files and git diffs stay small.
+    """
+    now = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    written = 0
+    for r in rows:
+        name = r.get("name")
+        if not name:
+            continue
+        path = os.path.join(PLAYER_DIR, slug(name) + ".json")
+        doc = load(path)
+        if not doc or doc.get("seasonId") != season_id:
+            doc = {"name": name, "seasonId": season_id, "points": []}
+        pts = doc["points"]
+        point = [iso, r.get("rank"), r.get("rating"), r.get("wins"), r.get("losses")]
+        if pts:
+            last = pts[-1]
+            unchanged = last[1:] == point[1:]
+            try:
+                age_h = (now - datetime.strptime(last[0], "%Y-%m-%dT%H:%M:%SZ")
+                         .replace(tzinfo=timezone.utc)).total_seconds() / 3600.0
+            except (ValueError, TypeError):
+                age_h = 999
+            if unchanged and age_h < FORCE_POINT_AFTER_H:
+                continue
+        pts.append(point)
+        if len(pts) > MAX_POINTS:
+            doc["points"] = pts[-MAX_POINTS:]
+        save(path, doc)
+        written += 1
+    return written
+
+
 def load(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -236,6 +283,11 @@ def main():
             continue
         hist["regions"][region] = merge(hist["regions"][region], rows, iso)
         changed = True
+        # Per-player detail. Only NA is written: the API serves one global board
+        # for both regions, so writing EU as well would duplicate every file.
+        if region == "na":
+            n = update_player_files(rows, iso, season["id"])
+            print("  wrote %d player files" % n)
 
     hist["updated"] = iso
     hist["seasonName"] = season.get("name")
