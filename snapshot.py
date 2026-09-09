@@ -157,12 +157,27 @@ def merge(agg, rows, iso):
 
     ratings = sorted([r["rating"] for r in rows if r["rating"] is not None])
     med = ratings[len(ratings) // 2] if ratings else None
+
+    # Roster churn against the previous snapshot. This can only be measured here,
+    # where both rosters are in hand - the page would otherwise have to download
+    # every player file to reconstruct it.
+    prev_names = {r.get("name") for r in (agg.get("current") or []) if r.get("name")}
+    now_names = {r["name"] for r in rows if r.get("name")}
+    entered = len(now_names - prev_names) if prev_names else len(now_names)
+    left = len(prev_names - now_names)
+    held = len(now_names & prev_names)
+    stab = round(held / len(prev_names), 4) if prev_names else None
+
     agg["series"].append({
         "t": iso,
         "c": len(rows),
         "r1": rows[0]["rating"] if rows else None,
         "r250": ratings[0] if ratings else None,
         "med": med,
+        "new": entered,                       # first appearance since last snapshot
+        "gone": left,                         # on the board last time, not now
+        "stab": stab,                         # share of the previous board still there
+        "ever": len(agg["players"]),          # cumulative distinct accounts this season
     })
     if len(agg["series"]) > MAX_SERIES:
         agg["series"] = agg["series"][-MAX_SERIES:]
