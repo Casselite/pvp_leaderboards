@@ -57,6 +57,7 @@ BOARD = os.path.join(DATA_DIR, "board_%s.json" % REGION)
 MAX_SERIES = 4000            # ~5.5 months of hourly points
 MAX_POINTS = 4000            # per-player cap
 FORCE_POINT_AFTER_H = 6      # record a point even when nothing changed, this often
+MIN_SNAPSHOT_GAP_S = 900     # ignore a second history point inside this window
 UA = "gw2-ladder-tracker (+github actions)"
 
 
@@ -438,7 +439,40 @@ def main():
     hist.setdefault("regions", {})
     hist["regions"].setdefault(REGION, blank(season, REGION))
 
+    # Do not record two snapshots minutes apart. The workflow runs a ~5.5 hour
+    # loop and then dispatches its successor, so at every handover the old job's
+    # final pass and the new job's first pass both fire - observed 13 seconds
+    # apart. Each duplicate inflates the snapshot count and adds a phantom
+    # stability=1.0 reading, which distorts "present in at least half the
+    # snapshots". The board file is still refreshed below; only the history
+    # series is protected.
+    last_t = None
+    prev_series = hist["regions"][REGION].get("series") or []
+    if prev_series:
+        last_t = prev_series[-1].get("t")
+    too_soon = False
+    if last_t:
+        try:
+            gap = (datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
+                   - datetime.strptime(last_t, "%Y-%m-%dT%H:%M:%SZ")).total_seconds()
+            too_soon = 0 <= gap < MIN_SNAPSHOT_GAP_S
+        except (ValueError, TypeError):
+            too_soon = False
+
     changed = False
+    if too_soon and rows:
+        print("  last snapshot was %.0fs ago (<%ds) - refreshing the board only,"
+              " not recording another history point" % (gap, MIN_SNAPSHOT_GAP_S))
+        save(BOARD, {
+            "region": REGION,
+            "seasonId": season["id"],
+            "seasonName": season.get("name"),
+            "collectedAt": iso,
+            "count": len(rows),
+            "rows": rows,
+        })
+        print("  wrote %s (%d rows)" % (BOARD, len(rows)))
+        return 0
     if not rows:
         # Empty board is normal at season start, but it is also what a failed
         # fetch looks like. Only record it while the aggregate is still empty;
