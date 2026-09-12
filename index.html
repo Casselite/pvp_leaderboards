@@ -326,6 +326,73 @@ function shape(rows,m){
       wr:games?(w/games)*100:null};}).sort((a,b)=>a.rank-b.rank);
 }
 
+/* ---------- the weekly match requirement ----------
+   Holding a board slot needs a top-250 rating AND a minimum number of matches
+   played, and that minimum rises by WEEKLY_MATCH_STEP at the end of every seven
+   days of the season.
+
+   Each rise is a natural experiment. Accounts below the new line fall off at
+   once, the cut line drops, and for a few hours the board shows players it
+   normally hides — because the only thing that has changed is the requirement,
+   not anyone's rating. That is the single window in which the population BELOW
+   the top 250 is observable at all, so it is worth measuring on purpose rather
+   than noticing after the fact. Capture-recapture cannot substitute: being on
+   the board has capture probability exactly zero for everyone under the cut, and
+   estimators of hidden population size are blind to a zero-probability stratum. */
+function bumpSchedule(startISO,endISO){
+  if(!startISO)return[];
+  const t0=new Date(startISO).getTime();
+  if(!isFinite(t0))return[];
+  const hardEnd=endISO?new Date(endISO).getTime():t0+200*864e5;
+  const out=[];
+  for(let w=1;w<=40;w++){
+    const t=t0+w*7*864e5;
+    if(t>hardEnd)break;
+    out.push({week:w+1,t:new Date(t).toISOString(),req:WEEKLY_MATCH_STEP*(w+1)});
+  }
+  return out;
+}
+function currentRequirement(startISO){
+  if(!startISO)return null;
+  const t0=new Date(startISO).getTime();
+  if(!isFinite(t0))return null;
+  const weeks=Math.max(0,Math.floor((Date.now()-t0)/(7*864e5)));
+  return {week:weeks+1,req:WEEKLY_MATCH_STEP*(weeks+1),
+          nextAt:new Date(t0+(weeks+1)*7*864e5).toISOString(),
+          nextReq:WEEKLY_MATCH_STEP*(weeks+2)};
+}
+
+/* One bump's worth of evidence, read out of the hourly series. The 48-hour
+   window is a compromise: long enough for the board to refill, short enough that
+   ordinary daily churn does not swamp the step change. */
+const BUMP_WINDOW_H=48;
+function bumpAnalysis(series,players,bumps){
+  const out=[];
+  bumps.forEach(b=>{
+    const bt=new Date(b.t).getTime();
+    if(bt>Date.now())return;
+    const before=series.filter(e=>new Date(e.t).getTime()<bt).slice(-1)[0];
+    const win=series.filter(e=>{const t=new Date(e.t).getTime();
+      return t>=bt&&t<bt+BUMP_WINDOW_H*36e5;});
+    if(!before||!win.length)return;
+    const low=win.reduce((a,e)=>(e.c<a.c?e:a),win[0]);
+    const cutLow=win.reduce((a,e)=>((e.r250==null?Infinity:e.r250)<(a.r250==null?Infinity:a.r250)?e:a),win[0]);
+    const back=win.find(e=>e.c>=before.c);
+    const fresh=Object.keys(players).filter(n=>{
+      const f=players[n].f?new Date(players[n].f).getTime():null;
+      return f!=null&&f>=bt&&f<bt+BUMP_WINDOW_H*36e5;}).length;
+    out.push({week:b.week,t:b.t,req:b.req,
+      beforeCount:before.c, beforeCut:before.r250,
+      lowCount:low.c, lowCut:cutLow.r250,
+      dropped:before.c-low.c,
+      cutDrop:(before.r250!=null&&cutLow.r250!=null)?before.r250-cutLow.r250:null,
+      refillH:back?(new Date(back.t).getTime()-bt)/36e5:null,
+      newFaces:fresh,
+      observedH:Math.min(BUMP_WINDOW_H,(Date.now()-bt)/36e5)});
+  });
+  return out;
+}
+
 /* ---------- pace ----------
    Games per day since the player joined the board. Uses only the live entry
    (join date + cumulative games), so it works with zero collected history. */
@@ -363,7 +430,7 @@ function stats(rows){
    This is the only chart on the page: it is the one quantity whose SHAPE says
    something a number cannot. Flattening means a fixed pool trading places;
    still climbing means a steady stream of new faces. */
-function everChart(series){
+function everChart(series,bumps){
   const box=el("div","chartbox");
   const pts=series.filter(p=>p.ever!=null&&p.t);
   if(pts.length<3){box.appendChild(el("p","note","Needs a few hours of snapshots before the curve means anything."));return box;}
@@ -387,6 +454,17 @@ function everChart(series){
   for(let i=0;i<=4;i++){const v=Math.round(hi*i/4),y=ys(v);
     add("line",{x1:ML,x2:W-MR,y1:y,y2:y,stroke:"var(--grid)","stroke-width":1});
     add("text",{x:ML-8,y:y+4,"text-anchor":"end",fill:"var(--muted)","font-size":11}).textContent=v;}
+  // Requirement bumps, drawn under the curve so they read as context rather than
+  // as data. A step in the line at one of these is the thing worth looking for.
+  (bumps||[]).forEach(b=>{
+    const bt=new Date(b.t).getTime();
+    if(!(bt>=t0&&bt<=t1))return;
+    const x=ML+((bt-t0)/Math.max(1,t1-t0))*(W-ML-MR);
+    add("line",{x1:x,x2:x,y1:MT,y2:H-MB,stroke:"var(--warn)","stroke-width":1,
+      "stroke-dasharray":"3 3"});
+    add("text",{x:x+4,y:MT+11,fill:"var(--warn)","font-size":narrow?9:10,
+      "font-family":'"JetBrains Mono", monospace'}).textContent=b.req+"g";
+  });
   let d="";pts.forEach((p,i)=>{d+=(i?" L ":"M ")+xs(p)+" "+ys(p.ever);});
   add("path",{d:`${d} L ${xs(pts[pts.length-1])} ${H-MB} L ${xs(pts[0])} ${H-MB} Z`,fill:"var(--chart-fill)"});
   add("path",{d,fill:"none",stroke:"var(--chart)","stroke-width":2,"stroke-linejoin":"round"});
@@ -636,6 +714,73 @@ function ladderTable(board,agg){
   return wrap;
 }
 
+/* The requirement panel. Before the first bump it is a forecast - how much of the
+   current board is standing below the next line. After one, it is the readout.
+   Either way it is the only view here that says anything about players the board
+   does not show. */
+function requirementPanel(agg,board){
+  const start=S.season&&S.season.start;
+  const cur=currentRequirement(start);
+  const p=el("div","panel wide");
+  p.appendChild(el("h2",null,"Match requirement"));
+  p.appendChild(el("p","sub","A board slot needs a top-250 rating and a minimum number of games. The minimum rises "+WEEKLY_MATCH_STEP+" every week, and each rise briefly exposes players the board normally hides."));
+  if(!cur){p.appendChild(el("p","note","Season start unknown, so the schedule cannot be worked out."));return p;}
+
+  const bumps=bumpSchedule(start,S.hist&&S.hist.end);
+  const done=bumpAnalysis((agg&&agg.series)||[],(agg&&agg.players)||{},bumps);
+
+  const hrs=(new Date(cur.nextAt).getTime()-Date.now())/36e5;
+  const rows=el("div","rows");
+  const add=(k,v,mut)=>{const r=el("div","row");r.appendChild(el("span","k",k));
+    r.appendChild(el("span","v"+(mut?" mut":""),v));rows.appendChild(r);};
+  add("Games needed now",fmt(cur.req));
+  add("Rises to",fmt(cur.nextReq));
+  add("When",hrs>0
+    ? new Date(cur.nextAt).toLocaleString()+" · in "+(hrs<48?Math.round(hrs)+"h":Math.round(hrs/24)+" days")
+    : "any moment",true);
+  if(board&&board.rows.length){
+    // Everyone whose season total is under the next line loses their slot unless
+    // they play the difference first. This is the size of the coming hole.
+    const risk=board.rows.filter(r=>r.games!=null&&r.games<cur.nextReq).length;
+    add("On the board below that line",fmt(risk)+" of "+fmt(board.rows.length),true);
+  }
+  p.appendChild(rows);
+
+  if(!done.length){
+    p.appendChild(el("p","note","No rise has happened yet this season. When the first one lands, this panel records how far the board collapses, how far the cut line falls, how long it takes to refill, and how many accounts appear that had never been seen before — that last number is the only direct count of players sitting below the top 250."));
+    return p;
+  }
+
+  const wrap=el("div","tablewrap");wrap.style.marginTop="16px";
+  const sc=el("div","scroll"),t=el("table");
+  t.innerHTML='<thead><tr><th>Rise</th><th class="n">Board before</th><th class="n">Fell to</th>'
+    +'<th class="n">Cut before</th><th class="n">Cut fell to</th><th class="n">Refilled</th>'
+    +'<th class="n">Never seen before</th></tr></thead>';
+  const tb=el("tbody");
+  done.forEach(d=>{
+    const tr=el("tr");
+    tr.appendChild(el("td","num",fmt(d.req)+" games"));
+    tr.appendChild(el("td","n num",fmt(d.beforeCount)));
+    const lc=el("td","n num",fmt(d.lowCount)+(d.dropped>0?" (−"+fmt(d.dropped)+")":""));
+    if(d.dropped>0)lc.style.color="var(--neg)";
+    tr.appendChild(lc);
+    tr.appendChild(el("td","n num",fmt(d.beforeCut)));
+    const cc=el("td","n num",fmt(d.lowCut)+(d.cutDrop>0?" (−"+fmt(d.cutDrop)+")":""));
+    if(d.cutDrop>0)cc.style.color="var(--neg)";
+    tr.appendChild(cc);
+    tr.appendChild(el("td","n num",d.refillH==null
+      ? (d.observedH>=BUMP_WINDOW_H?"not within "+BUMP_WINDOW_H+"h":"not yet")
+      : Math.round(d.refillH)+"h"));
+    const nf=el("td","n num",fmt(d.newFaces));
+    if(d.newFaces)nf.style.color="var(--pos)";
+    tr.appendChild(nf);
+    tb.appendChild(tr);});
+  t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
+  p.appendChild(wrap);
+  p.appendChild(el("p","note","“Never seen before” counts accounts first recorded in the "+BUMP_WINDOW_H+" hours after the rise. Nobody's rating changed because of the rise, so these are players who were always there and always below the cut — the only moment they become visible. A board that refills fast means real depth underneath; one that stays short means there is not much down there."));
+  return p;
+}
+
 function populationView(){
   const v=document.createDocumentFragment();
   const agg=S.hist?.regions?.[S.region];
@@ -691,9 +836,11 @@ function populationView(){
   const p1=el("div","panel wide");
   p1.appendChild(el("h2",null,"Distinct players over the season"));
   p1.appendChild(el("p","sub","Every account that has appeared in the top 250 at least once, cumulative. The board holds 250 at a time — this is how many different people pass through it."));
-  p1.appendChild(everChart(series));
-  p1.appendChild(el("p","note","If this flattens, the same group is trading places. If it keeps climbing, new players keep breaking in — and the gap between this number and the active core is the size of the churn."));
+  p1.appendChild(everChart(series,bumpSchedule(S.season&&S.season.start,S.hist&&S.hist.end)));
+  p1.appendChild(el("p","note","If this flattens, the same group is trading places. If it keeps climbing, new players keep breaking in — and the gap between this number and the active core is the size of the churn. The dashed lines mark each rise in the match requirement; a step up right after one is the board admitting players it had been hiding."));
   v.appendChild(p1);
+
+  v.appendChild(requirementPanel(agg,S.boards[S.region]));
 
   const wrap=el("div","tablewrap");
   const head=el("div","thead");
