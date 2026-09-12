@@ -25,7 +25,7 @@ import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 API = "https://api.guildwars2.com/v2"
 
@@ -58,6 +58,8 @@ MAX_SERIES = 4000            # ~5.5 months of hourly points
 MAX_POINTS = 4000            # per-player cap
 FORCE_POINT_AFTER_H = 6      # record a point even when nothing changed, this often
 MIN_SNAPSHOT_GAP_S = 900     # ignore a second history point inside this window
+WEEKLY_MATCH_STEP = 15       # the match minimum rises by this every week
+BUMP_WINDOW_H = 48           # how long a requirement rise is measured for
 UA = "gw2-ladder-tracker (+github actions)"
 
 
@@ -187,7 +189,96 @@ def blank(season, region):
         "players": {},      # account name -> record
         "series": [],       # board shape over time
         "current": [],      # most recent full board
+        "bumps": {},        # requirement rise -> what the board did around it
     }
+
+
+def bump_times(season):
+    """When the match minimum rises, as ISO strings.
+
+    The minimum goes up by WEEKLY_MATCH_STEP at the end of every seven days of
+    the season. Computed the same way the page computes it, so the two never
+    disagree about which rise a measurement belongs to.
+    """
+    start, end = season.get("start"), season.get("end")
+    if not start:
+        return []
+    try:
+        t0 = datetime.strptime(start[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return []
+    try:
+        t1 = datetime.strptime(end[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        t1 = t0 + timedelta(days=200)
+    out, w = [], 1
+    while w <= 40:
+        t = t0 + timedelta(days=7 * w)
+        if t > t1:
+            break
+        out.append((t, WEEKLY_MATCH_STEP * (w + 1)))
+        w += 1
+    return out
+
+
+def record_bump(agg, season, rows, iso, pre_roster, cut_before, prev_count):
+    """Measure what a requirement rise does to the board.
+
+    A rise is the only moment the ladder shows players it normally hides: nobody's
+    rating changes, the eligibility rule does, and accounts that were always below
+    the cut become briefly visible. Refill time alone cannot tell that apart from
+    board regulars grinding their way back, so the board is split three ways:
+
+      held    - was on the board immediately before the rise (whether it kept its
+                slot throughout or fell off and played its way back - either way
+                the ladder was already showing this account)
+      back    - recorded earlier this season but NOT on the board just before the
+                rise: someone the cut had pushed out, now visible again because
+                the cut dropped
+      fresh   - never recorded at any point this season
+
+    Only `fresh` is evidence about the population below the cut. `held` and `back`
+    are the same people taking a lap. The pre-rise roster cannot be rebuilt after
+    the fact (the history keeps only the latest board), so it is captured here on
+    the first pass at or after the rise and kept with the record.
+    """
+    now = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    active = None
+    for t, req in bump_times(season):
+        if t <= now < t + timedelta(hours=BUMP_WINDOW_H):
+            active = (t, req)
+    if not active:
+        return
+    t, req = active
+    key = t.strftime("%Y-%m-%dT%H:%M:%SZ")
+    rec = agg.setdefault("bumps", {}).setdefault(key, {})
+    if "req" not in rec:
+        # First pass after this rise. agg["current"] has not been merged yet, so
+        # it still holds the board as it stood before the rule changed.
+        rec.update({"req": req, "at": key, "preRoster": list(pre_roster),
+                    "preCount": prev_count, "preCut": cut_before, "series": []})
+        print("  requirement rose to %d; captured pre-rise roster of %d"
+              % (req, len(pre_roster)))
+
+    pre = set(rec.get("preRoster") or [])
+    # "Seen before the rise" is read from each account's own first-seen stamp, so
+    # an account first recorded in this very pass is never counted as a returner.
+    seen_before = {n for n, p in agg.get("players", {}).items()
+                   if p.get("f") and p["f"] < key}
+    names = [r.get("name") for r in rows if r.get("name")]
+    held = sum(1 for n in names if n in pre)
+    back = sum(1 for n in names if n not in pre and n in seen_before)
+    fresh = len(names) - held - back
+    ratings = sorted([r["rating"] for r in rows if r.get("rating") is not None])
+    rec["series"].append({
+        "t": iso, "c": len(names), "cut": ratings[0] if ratings else None,
+        "held": held, "back": back, "fresh": fresh,
+        "h": round((now - t).total_seconds() / 3600.0, 2),
+    })
+    if len(rec["series"]) > 3 * BUMP_WINDOW_H:
+        rec["series"] = rec["series"][-3 * BUMP_WINDOW_H:]
+    print("  rise+%.0fh: board %d = %d already shown / %d re-surfaced / %d never seen before"
+          % (rec["series"][-1]["h"], len(names), held, back, fresh))
 
 
 def merge(agg, rows, iso):
@@ -483,8 +574,23 @@ def main():
         else:
             print("  %s: empty board, existing history kept" % REGION)
     else:
+        # Captured BEFORE the merge: once merge() runs, agg["current"] is this
+        # pass's board and the pre-rise roster is gone for good. The history keeps
+        # only the latest board, so there is no second chance to read it.
+        agg_now = hist["regions"][REGION]
+        pre_rows = agg_now.get("current") or []
+        pre_names = [r.get("name") for r in pre_rows if r.get("name")]
+        pre_ratings = sorted([r["rating"] for r in pre_rows if r.get("rating") is not None])
+        pre_cut = pre_ratings[0] if pre_ratings else None
+
         hist["regions"][REGION] = merge(hist["regions"][REGION], rows, iso)
         changed = True
+        try:
+            record_bump(hist["regions"][REGION], season, rows, iso,
+                        pre_names, pre_cut, len(pre_names))
+        except Exception as e:                   # noqa: BLE001
+            # A measurement is not worth losing an hour of history over.
+            print("  bump bookkeeping failed (%s); snapshot kept" % e)
         n = update_player_files(rows, iso, season["id"])
         print("  wrote %d player files" % n)
         # The board the page renders. Serving stored rows instead of letting each
