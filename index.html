@@ -348,7 +348,11 @@ function bumpSchedule(startISO,endISO){
   for(let w=1;w<=40;w++){
     const t=t0+w*7*864e5;
     if(t>hardEnd)break;
-    out.push({week:w+1,t:new Date(t).toISOString(),req:WEEKLY_MATCH_STEP*(w+1)});
+    // Second precision, no milliseconds: this string is the key the collector
+    // files its measurements under, and "...T19:00:00.000Z" would never match
+    // "...T19:00:00Z".
+    out.push({week:w+1,t:new Date(t).toISOString().replace(/\.\d{3}Z$/,"Z"),
+              req:WEEKLY_MATCH_STEP*(w+1)});
   }
   return out;
 }
@@ -366,18 +370,44 @@ function currentRequirement(startISO){
    window is a compromise: long enough for the board to refill, short enough that
    ordinary daily churn does not swamp the step change. */
 const BUMP_WINDOW_H=48;
-function bumpAnalysis(series,players,bumps){
+/* Read out what a rise did, preferring the collector's own record.
+
+   The three-way split cannot be reconstructed by the page: the history keeps only
+   the latest board, so "who was on it immediately before the rise" is gone within
+   the hour unless something captured it at the time. The collector does that and
+   stores it under agg.bumps. The series-derived path below is the fallback for a
+   rise recorded before that existed - it can still see the collapse and the
+   refill, just not who filled the seats. */
+function bumpAnalysis(agg,bumps){
+  const series=(agg&&agg.series)||[], players=(agg&&agg.players)||{}, recs=(agg&&agg.bumps)||{};
   const out=[];
   bumps.forEach(b=>{
     const bt=new Date(b.t).getTime();
     if(bt>Date.now())return;
+    const rec=recs[b.t];
+    if(rec&&Array.isArray(rec.series)&&rec.series.length){
+      const ps=rec.series;
+      const low=ps.reduce((a,e)=>(e.c<a.c?e:a),ps[0]);
+      const lowCut=ps.reduce((a,e)=>((e.cut==null?Infinity:e.cut)<(a.cut==null?Infinity:a.cut)?e:a),ps[0]);
+      const back=ps.find(e=>e.c>=rec.preCount);
+      const last=ps[ps.length-1];
+      out.push({week:b.week,t:b.t,req:rec.req||b.req,
+        beforeCount:rec.preCount, beforeCut:rec.preCut,
+        lowCount:low.c, lowCut:lowCut.cut,
+        dropped:rec.preCount-low.c,
+        cutDrop:(rec.preCut!=null&&lowCut.cut!=null)?rec.preCut-lowCut.cut:null,
+        refillH:back?back.h:null,
+        held:last.held, backCount:last.back, newFaces:last.fresh,
+        atH:last.h, observedH:Math.min(BUMP_WINDOW_H,(Date.now()-bt)/36e5), full:true});
+      return;
+    }
     const before=series.filter(e=>new Date(e.t).getTime()<bt).slice(-1)[0];
     const win=series.filter(e=>{const t=new Date(e.t).getTime();
       return t>=bt&&t<bt+BUMP_WINDOW_H*36e5;});
     if(!before||!win.length)return;
     const low=win.reduce((a,e)=>(e.c<a.c?e:a),win[0]);
     const cutLow=win.reduce((a,e)=>((e.r250==null?Infinity:e.r250)<(a.r250==null?Infinity:a.r250)?e:a),win[0]);
-    const back=win.find(e=>e.c>=before.c);
+    const rback=win.find(e=>e.c>=before.c);
     const fresh=Object.keys(players).filter(n=>{
       const f=players[n].f?new Date(players[n].f).getTime():null;
       return f!=null&&f>=bt&&f<bt+BUMP_WINDOW_H*36e5;}).length;
@@ -386,9 +416,9 @@ function bumpAnalysis(series,players,bumps){
       lowCount:low.c, lowCut:cutLow.r250,
       dropped:before.c-low.c,
       cutDrop:(before.r250!=null&&cutLow.r250!=null)?before.r250-cutLow.r250:null,
-      refillH:back?(new Date(back.t).getTime()-bt)/36e5:null,
-      newFaces:fresh,
-      observedH:Math.min(BUMP_WINDOW_H,(Date.now()-bt)/36e5)});
+      refillH:rback?(new Date(rback.t).getTime()-bt)/36e5:null,
+      held:null, backCount:null, newFaces:fresh,
+      observedH:Math.min(BUMP_WINDOW_H,(Date.now()-bt)/36e5), full:false});
   });
   return out;
 }
@@ -727,7 +757,7 @@ function requirementPanel(agg,board){
   if(!cur){p.appendChild(el("p","note","Season start unknown, so the schedule cannot be worked out."));return p;}
 
   const bumps=bumpSchedule(start,S.hist&&S.hist.end);
-  const done=bumpAnalysis((agg&&agg.series)||[],(agg&&agg.players)||{},bumps);
+  const done=bumpAnalysis(agg,bumps);
 
   const hrs=(new Date(cur.nextAt).getTime()-Date.now())/36e5;
   const rows=el("div","rows");
@@ -753,31 +783,50 @@ function requirementPanel(agg,board){
 
   const wrap=el("div","tablewrap");wrap.style.marginTop="16px";
   const sc=el("div","scroll"),t=el("table");
-  t.innerHTML='<thead><tr><th>Rise</th><th class="n">Board before</th><th class="n">Fell to</th>'
-    +'<th class="n">Cut before</th><th class="n">Cut fell to</th><th class="n">Refilled</th>'
-    +'<th class="n">Never seen before</th></tr></thead>';
+  t.innerHTML='<thead><tr><th>Rise</th><th class="n">Board fell to</th><th class="n">Cut fell to</th>'
+    +'<th class="n">Refilled</th><th class="n">Already shown</th><th class="n">Re-surfaced</th>'
+    +'<th class="n">Never seen</th></tr></thead>';
   const tb=el("tbody");
   done.forEach(d=>{
     const tr=el("tr");
     tr.appendChild(el("td","num",fmt(d.req)+" games"));
-    tr.appendChild(el("td","n num",fmt(d.beforeCount)));
     const lc=el("td","n num",fmt(d.lowCount)+(d.dropped>0?" (−"+fmt(d.dropped)+")":""));
     if(d.dropped>0)lc.style.color="var(--neg)";
+    lc.title="Board held "+fmt(d.beforeCount)+" immediately before the rise";
     tr.appendChild(lc);
-    tr.appendChild(el("td","n num",fmt(d.beforeCut)));
     const cc=el("td","n num",fmt(d.lowCut)+(d.cutDrop>0?" (−"+fmt(d.cutDrop)+")":""));
     if(d.cutDrop>0)cc.style.color="var(--neg)";
+    cc.title="Cut line was "+fmt(d.beforeCut)+" immediately before the rise";
     tr.appendChild(cc);
     tr.appendChild(el("td","n num",d.refillH==null
-      ? (d.observedH>=BUMP_WINDOW_H?"not within "+BUMP_WINDOW_H+"h":"not yet")
+      ? (d.observedH>=BUMP_WINDOW_H?"never":"not yet")
       : Math.round(d.refillH)+"h"));
-    const nf=el("td","n num",fmt(d.newFaces));
-    if(d.newFaces)nf.style.color="var(--pos)";
-    tr.appendChild(nf);
+    // The anatomy. Only the last column is evidence about players below the cut;
+    // the other two are the same people the board was already showing.
+    if(d.full){
+      const hc=el("td","n num",fmt(d.held));hc.style.color="var(--muted)";tr.appendChild(hc);
+      tr.appendChild(el("td","n num",fmt(d.backCount)));
+      const nf=el("td","n num",fmt(d.newFaces));
+      if(d.newFaces)nf.style.color="var(--pos)";
+      nf.title="Accounts first recorded after this rise";
+      tr.appendChild(nf);
+    }else{
+      const c=el("td","n num","—");c.setAttribute("colspan","2");
+      c.title="Not recorded for this rise";tr.appendChild(c);
+      const nf=el("td","n num",fmt(d.newFaces));
+      if(d.newFaces)nf.style.color="var(--pos)";tr.appendChild(nf);
+    }
     tb.appendChild(tr);});
   t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
   p.appendChild(wrap);
-  p.appendChild(el("p","note","“Never seen before” counts accounts first recorded in the "+BUMP_WINDOW_H+" hours after the rise. Nobody's rating changed because of the rise, so these are players who were always there and always below the cut — the only moment they become visible. A board that refills fast means real depth underneath; one that stays short means there is not much down there."));
+  const anat=el("p","note");
+  anat.innerHTML="The last three columns are the board once it had refilled, split by where the players came from. "
+    +"<b>Already shown</b> were on the board immediately before the rise — whether they kept the slot or dropped off "
+    +"and played their way back, the ladder was already showing them. <b>Re-surfaced</b> were recorded earlier this "
+    +"season but had been pushed out by the cut, and became visible again when it fell. <b>Never seen</b> had never "
+    +"been recorded at all.";
+  p.appendChild(anat);
+  p.appendChild(el("p","note","Only that last number says anything about the population below the top 250. Nobody's rating changed because the requirement moved — the rule did — so an account appearing for the first time was always there and always under the cut. Refill time on its own cannot tell that apart from regulars grinding back, which is why the split matters more than the clock."));
   return p;
 }
 
