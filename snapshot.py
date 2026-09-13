@@ -221,7 +221,8 @@ def bump_times(season):
     return out
 
 
-def record_bump(agg, season, rows, iso, pre_roster, cut_before, prev_count):
+def record_bump(agg, season, rows, iso, pre_roster, cut_before, prev_count,
+                min_games_now=None, min_games_prev=None):
     """Measure what a requirement rise does to the board.
 
     A rise is the only moment the ladder shows players it normally hides: nobody's
@@ -247,6 +248,31 @@ def record_bump(agg, season, rows, iso, pre_roster, cut_before, prev_count):
     for t, req in bump_times(season):
         if t <= now < t + timedelta(hours=BUMP_WINDOW_H):
             active = (t, req)
+
+    # The schedule above is arithmetic from the season start - seven days, fifteen
+    # matches - and nothing verifies it. If ArenaNet's real cadence differs by so
+    # much as a day, the window opens at the wrong time and the pre-rise roster,
+    # the one thing that cannot be recovered afterwards, is captured too late to
+    # be the pre-rise roster at all.
+    #
+    # So also watch the board itself. Nobody holds a slot below the minimum, so
+    # the smallest game count on the board IS the minimum. When that number jumps,
+    # the requirement rose, whatever the calendar says. An observed jump opens a
+    # window of its own, keyed to this hour.
+    observed = None
+    if min_games_now is not None and min_games_prev is not None \
+            and min_games_now - min_games_prev >= WEEKLY_MATCH_STEP:
+        observed = (now, min_games_now)
+        print("  observed the match minimum jump from %d to %d"
+              % (min_games_prev, min_games_now))
+
+    if observed and (not active or abs((observed[0] - active[0]).total_seconds()) > 3 * 3600):
+        # More than three hours from where the schedule expected it: trust the
+        # board, not the arithmetic, and note that they disagreed.
+        if active:
+            print("  NOTE: schedule expected the rise at %s, the board says %s"
+                  % (active[0].isoformat(), observed[0].isoformat()))
+        active = observed
     if not active:
         return
     t, req = active
@@ -273,6 +299,7 @@ def record_bump(agg, season, rows, iso, pre_roster, cut_before, prev_count):
     rec["series"].append({
         "t": iso, "c": len(names), "cut": ratings[0] if ratings else None,
         "held": held, "back": back, "fresh": fresh,
+        "mg": min_games_now,
         "h": round((now - t).total_seconds() / 3600.0, 2),
     })
     if len(rec["series"]) > 3 * BUMP_WINDOW_H:
@@ -309,15 +336,45 @@ def merge(agg, rows, iso):
     ratings = sorted([r["rating"] for r in rows if r["rating"] is not None])
     med = ratings[len(ratings) // 2] if ratings else None
 
+    def pct(sorted_vals, p):
+        if not sorted_vals:
+            return None
+        return sorted_vals[min(len(sorted_vals) - 1,
+                               int(round((len(sorted_vals) - 1) * p)))]
+
     # Roster churn against the previous snapshot. This can only be measured here,
     # where both rosters are in hand - the page would otherwise have to download
     # every player file to reconstruct it.
-    prev_names = {r.get("name") for r in (agg.get("current") or []) if r.get("name")}
+    prev = {r.get("name"): r for r in (agg.get("current") or []) if r.get("name")}
+    prev_names = set(prev)
     now_names = {r["name"] for r in rows if r.get("name")}
     entered = len(now_names - prev_names) if prev_names else len(now_names)
     left = len(prev_names - now_names)
     held = len(now_names & prev_names)
     stab = round(held / len(prev_names), 4) if prev_names else None
+
+    # Games actually played since the previous snapshot, summed over everyone who
+    # was on the board both times. Accounts that arrived this hour are skipped -
+    # their earlier game count was never observed, so counting their whole season
+    # total as "this hour" would invent activity. Derivable from the player files
+    # after the fact, but only by downloading all of them; one integer here makes
+    # the activity curve free to draw.
+    played = 0
+    for r in rows:
+        p = prev.get(r.get("name"))
+        if not p:
+            continue
+        d = ((r.get("games") or 0) - (p.get("games") or 0))
+        if d > 0:
+            played += d
+
+    # The eligibility threshold, OBSERVED rather than assumed. Nobody can hold a
+    # slot without the minimum number of matches, so the smallest game count on
+    # the board is that minimum (or just above it). This is the only way to check
+    # the weekly schedule against reality instead of trusting arithmetic from the
+    # season start - and the moment it jumps, a requirement rise has happened.
+    games_on_board = sorted([r["games"] for r in rows if r.get("games") is not None])
+    min_games = games_on_board[0] if games_on_board else None
 
     agg["series"].append({
         "t": iso,
@@ -325,10 +382,14 @@ def merge(agg, rows, iso):
         "r1": rows[0]["rating"] if rows else None,
         "r250": ratings[0] if ratings else None,
         "med": med,
+        "q1": pct(ratings, 0.25),             # rating quartiles: reconstructing these
+        "q3": pct(ratings, 0.75),             # later would need every player file
         "new": entered,                       # first appearance since last snapshot
         "gone": left,                         # on the board last time, not now
         "stab": stab,                         # share of the previous board still there
         "ever": len(agg["players"]),          # cumulative distinct accounts this season
+        "g": played,                          # games played across the board this hour
+        "mg": min_games,                      # observed match requirement
     })
     if len(agg["series"]) > MAX_SERIES:
         agg["series"] = agg["series"][-MAX_SERIES:]
@@ -338,6 +399,18 @@ def merge(agg, rows, iso):
     agg["lastAt"] = iso
     agg["current"] = rows
     return agg
+
+
+def epoch(iso_str):
+    """ISO timestamp -> epoch seconds, or None. Stored as an integer because a
+    full ISO string per point roughly doubles the size of every player file."""
+    if not iso_str:
+        return None
+    try:
+        return int(datetime.strptime(str(iso_str)[:19], "%Y-%m-%dT%H:%M:%S")
+                   .replace(tzinfo=timezone.utc).timestamp())
+    except (ValueError, TypeError):
+        return None
 
 
 def slug(name):
@@ -364,10 +437,21 @@ def update_player_files(rows, iso, season_id):
         if not doc or doc.get("seasonId") != season_id:
             doc = {"name": name, "seasonId": season_id, "points": []}
         pts = doc["points"]
-        point = [iso, r.get("rank"), r.get("rating"), r.get("wins"), r.get("losses")]
+        # Index 5 is the API's own `date` for this entry - when the account last
+        # played - as epoch seconds. It is the single most useful field we were
+        # discarding: the board file that carries it is overwritten every hour, so
+        # every past hour's version is gone for good. Win/loss deltas can only say
+        # "sometime in the last hour or six"; this says exactly when, which is what
+        # a real activity curve and any session analysis need.
+        point = [iso, r.get("rank"), r.get("rating"), r.get("wins"), r.get("losses"),
+                 epoch(r.get("date"))]
         if pts:
             last = pts[-1]
-            unchanged = last[1:] == point[1:]
+            # Compare rank/rating/wins/losses only. The last-match stamp is
+            # deliberately excluded: including it would make every point "changed"
+            # the moment a player queues, defeating the change detection that keeps
+            # these files and their git diffs small.
+            unchanged = last[1:5] == point[1:5]
             try:
                 age_h = (now - datetime.strptime(last[0], "%Y-%m-%dT%H:%M:%SZ")
                          .replace(tzinfo=timezone.utc)).total_seconds() / 3600.0
@@ -586,8 +670,11 @@ def main():
         hist["regions"][REGION] = merge(hist["regions"][REGION], rows, iso)
         changed = True
         try:
+            ser = hist["regions"][REGION].get("series") or []
+            mg_now = ser[-1].get("mg") if ser else None
+            mg_prev = ser[-2].get("mg") if len(ser) > 1 else None
             record_bump(hist["regions"][REGION], season, rows, iso,
-                        pre_names, pre_cut, len(pre_names))
+                        pre_names, pre_cut, len(pre_names), mg_now, mg_prev)
         except Exception as e:                   # noqa: BLE001
             # A measurement is not worth losing an hour of history over.
             print("  bump bookkeeping failed (%s); snapshot kept" % e)
