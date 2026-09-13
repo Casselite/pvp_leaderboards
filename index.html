@@ -420,6 +420,29 @@ function bumpAnalysis(agg,bumps){
       held:null, backCount:null, newFaces:fresh,
       observedH:Math.min(BUMP_WINDOW_H,(Date.now()-bt)/36e5), full:false});
   });
+  // Records the collector filed at an hour the schedule did not predict. The
+  // collector trusts the board over the calendar, and so must this: a rise that
+  // actually happened matters more than one arithmetic expected.
+  const scheduled=new Set(bumps.map(b=>b.t));
+  Object.keys(recs).forEach(k=>{
+    if(scheduled.has(k))return;
+    const rec=recs[k];
+    if(!rec||!Array.isArray(rec.series)||!rec.series.length)return;
+    const ps=rec.series, bt=new Date(k).getTime();
+    const low=ps.reduce((a,e)=>(e.c<a.c?e:a),ps[0]);
+    const lowCut=ps.reduce((a,e)=>((e.cut==null?Infinity:e.cut)<(a.cut==null?Infinity:a.cut)?e:a),ps[0]);
+    const rb=ps.find(e=>e.c>=rec.preCount);
+    const last=ps[ps.length-1];
+    out.push({week:null,t:k,req:rec.req,unscheduled:true,
+      beforeCount:rec.preCount, beforeCut:rec.preCut,
+      lowCount:low.c, lowCut:lowCut.cut,
+      dropped:rec.preCount-low.c,
+      cutDrop:(rec.preCut!=null&&lowCut.cut!=null)?rec.preCut-lowCut.cut:null,
+      refillH:rb?rb.h:null,
+      held:last.held, backCount:last.back, newFaces:last.fresh,
+      atH:last.h, observedH:Math.min(BUMP_WINDOW_H,(Date.now()-bt)/36e5), full:true});
+  });
+  out.sort((a,b)=>String(a.t).localeCompare(String(b.t)));
   return out;
 }
 
@@ -763,7 +786,15 @@ function requirementPanel(agg,board){
   const rows=el("div","rows");
   const add=(k,v,mut)=>{const r=el("div","row");r.appendChild(el("span","k",k));
     r.appendChild(el("span","v"+(mut?" mut":""),v));rows.appendChild(r);};
-  add("Games needed now",fmt(cur.req));
+  // The observed minimum, straight off the board: nobody holds a slot below the
+  // requirement, so the smallest game count on the board is the requirement (or
+  // a hair above it). Shown next to the calculated one because if the two ever
+  // disagree, the calendar arithmetic is the thing that is wrong.
+  const ser=(agg&&agg.series)||[];
+  const obs=(()=>{for(let i=ser.length-1;i>=0;i--)if(ser[i].mg!=null)return ser[i].mg;return null;})();
+  add("Games needed now",fmt(cur.req)+(obs!=null?" · "+fmt(obs)+" observed":""),false);
+  if(obs!=null&&obs>=cur.req+WEEKLY_MATCH_STEP)
+    add("Note","the board says the rise has already happened",true);
   add("Rises to",fmt(cur.nextReq));
   add("When",hrs>0
     ? new Date(cur.nextAt).toLocaleString()+" · in "+(hrs<48?Math.round(hrs)+"h":Math.round(hrs/24)+" days")
@@ -789,7 +820,10 @@ function requirementPanel(agg,board){
   const tb=el("tbody");
   done.forEach(d=>{
     const tr=el("tr");
-    tr.appendChild(el("td","num",fmt(d.req)+" games"));
+    const rc=el("td","num",fmt(d.req)+" games");
+    if(d.unscheduled){rc.title="Detected from the board, not from the schedule — "
+      +new Date(d.t).toLocaleString();rc.textContent+=" *";}
+    tr.appendChild(rc);
     const lc=el("td","n num",fmt(d.lowCount)+(d.dropped>0?" (−"+fmt(d.dropped)+")":""));
     if(d.dropped>0)lc.style.color="var(--neg)";
     lc.title="Board held "+fmt(d.beforeCount)+" immediately before the rise";
