@@ -146,6 +146,7 @@
   .pill{font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
     padding:2px 6px;border-radius:2px;white-space:nowrap}
   .p-new{background:var(--accent-soft);color:var(--accent-ink)}
+  .p-peak{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
 
   /* Sortable headers. The button inherits the th's type so the column label does
      not change appearance when it becomes clickable - only the arrow does. */
@@ -159,6 +160,18 @@
   th .sortbtn.on .arrow{opacity:1}
   th.n .sortbtn{justify-content:flex-end;width:100%}
   .noresults{margin:0;padding:22px 17px;color:var(--muted);font-size:14px;text-align:center}
+
+  /* Departed accounts sit under the board, visually separated so they can never
+     be mistaken for current standings. */
+  .departed{border-top:2px solid var(--line);background:var(--surface-2)}
+  .departed .dephead{padding:14px 17px 10px;display:flex;flex-direction:column;gap:4px}
+  .departed h3{font-family:Oswald,sans-serif;font-weight:500;font-size:14px;margin:0;
+    text-transform:uppercase;letter-spacing:.07em;color:var(--ink-2)}
+  .departed table{min-width:620px}
+  .departed .note{padding:0 17px 13px}
+  .departed tbody tr:hover td{background:var(--surface)}
+  td.reason-warn{color:var(--warn)}
+  td.reason-stop{color:var(--neg)}
 
   .state{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:40px 28px;text-align:center;box-shadow:var(--shadow)}
   .state h2{font-size:20px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em}
@@ -674,6 +687,117 @@ function sortRows(rows){
   });
 }
 
+/* Accounts recorded this season that are NOT on the board right now.
+
+   Why someone left is worth more than the fact that they did, and the two
+   reasons are distinguishable. A slot needs a top-250 rating AND a minimum
+   number of matches, so an account whose game count at its last sighting is
+   below today's requirement fell off the games line; one that cleared the games
+   line was pushed out by the rating cut. The cut at the moment they vanished is
+   read back out of the series, because "the cut was 1,248 then and it is 1,339
+   now" is the difference between losing form and simply being overtaken. */
+const DEPARTED_LIMIT=40;
+function departedMatches(q,board,agg){
+  const players=(agg&&agg.players)||{};
+  const onBoard=new Set(board.rows.map(r=>String(r.name).toLowerCase()));
+  const out=[];
+  for(const name in players){
+    const lc=name.toLowerCase();
+    if(!lc.includes(q)||onBoard.has(lc))continue;
+    out.push(Object.assign({name:name},players[name]));
+  }
+  // Highest peak first: if a name is ambiguous, the account that got furthest is
+  // almost always the one being looked for.
+  out.sort((a,b)=>(a.br==null?1e9:a.br)-(b.br==null?1e9:b.br));
+  return out;
+}
+
+function cutAt(agg,iso){
+  const s=(agg&&agg.series)||[];
+  if(!iso||!s.length)return null;
+  const t=new Date(iso).getTime();
+  let best=null;
+  for(const e of s){
+    if(new Date(e.t).getTime()<=t&&e.r250!=null)best=e.r250;
+    else if(new Date(e.t).getTime()>t)break;
+  }
+  return best;
+}
+function requirementNow(){
+  const c=currentRequirement(S.season&&S.season.start);
+  return c?c.req:null;
+}
+function ago(iso){
+  if(!iso)return "—";
+  const h=(Date.now()-new Date(iso).getTime())/36e5;
+  if(h<1)return "under an hour ago";
+  if(h<48)return Math.round(h)+"h ago";
+  return Math.round(h/24)+" days ago";
+}
+
+function renderDeparted(box,list,q,agg){
+  box.innerHTML="";
+  box.hidden=!list.length;
+  if(!list.length)return;
+  const head=el("div","dephead");
+  head.appendChild(el("h3",null,"No longer on the board"));
+  head.appendChild(el("p","note",list.length===1
+    ?"One account matching that name was recorded this season but is not on the board now."
+    :fmt(list.length)+" accounts matching that name were recorded this season but are not on the board now."));
+  box.appendChild(head);
+  const req=requirementNow();
+  const sc=el("div","scroll"),t=el("table");
+  t.innerHTML='<thead><tr><th>Account</th><th class="n">Best rank</th><th class="n">Last rating</th>'
+    +'<th class="n">Games</th><th>Last seen</th><th>Likely reason</th></tr></thead>';
+  const tb=el("tbody");
+  list.slice(0,DEPARTED_LIMIT).forEach(p=>{
+    const tr=el("tr");tr.className="click";tr.tabIndex=0;
+    tr.appendChild(el("td","nm",p.name));
+    tr.appendChild(el("td","n num",p.br!=null?"#"+fmt(p.br):"—"));
+    // lr only exists for accounts seen since the collector started recording it.
+    // Where it is missing, the peak is shown and LABELLED as the peak - quietly
+    // printing a best rating under a "last rating" header would be a lie, and a
+    // tooltip nobody hovers is not a disclosure.
+    const lr=el("td","rt n num");
+    if(p.lr!=null){lr.textContent=fmt(p.lr);}
+    else{lr.textContent=fmt(p.bt);
+      const c=el("span","pill p-peak","peak");c.style.marginLeft="6px";
+      c.title="Last rating was not recorded for this account; this is its highest.";
+      lr.appendChild(c);}
+    tr.appendChild(lr);
+    tr.appendChild(el("td","n num",fmt(p.lg)));
+    tr.appendChild(el("td","num",ago(p.l)));
+
+    // The inference. Stated as a likelihood, never as fact - the API never says
+    // why anyone left, and a player can fail both tests at once.
+    // Two ways off the board, and the game count separates them on its own:
+    // below the requirement means the games line, above it means the rating cut.
+    // The last rating only refines the second case - it never decides it.
+    let why="—",cls="";
+    if(p.lg!=null&&req!=null&&p.lg<req){
+      why="short of the "+fmt(req)+"-game line";cls="warn";
+    }else if(p.lg!=null&&req!=null){
+      const then=cutAt(agg,p.l);
+      if(p.lr!=null&&then!=null&&p.lr<=then){why="fell below the cut";cls="stop";}
+      else if(p.lr!=null&&then!=null){why="cut rose past them";cls="";}
+      else {why="dropped below the cut";cls="stop";}
+    }
+    const w=el("td",null,why);
+    if(cls)w.classList.add("reason-"+cls);
+    tr.appendChild(w);
+
+    const open=()=>toggleRow(tr,{name:p.name,rank:p.lk,rating:p.lr,
+      wins:null,losses:null,games:p.lg},6);
+    tr.addEventListener("click",open);
+    tr.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);sc.appendChild(t);box.appendChild(sc);
+  if(list.length>DEPARTED_LIMIT)
+    box.appendChild(el("p","note","Showing the "+DEPARTED_LIMIT+" that reached the highest rank, of "+fmt(list.length)+" matches."));
+  box.appendChild(el("p","note","Click a row for the full recorded history. The reason is inferred from the last reading, not reported by the API — an account can miss both the games line and the cut at once."));
+}
+
 function ladderTable(board,agg){
   const wrap=el("div","tablewrap"),head=el("div","thead");
   head.appendChild(el("h2",null,`Top ${board.rows.length} · ${S.region.toUpperCase()}`));
@@ -745,6 +869,12 @@ function ladderTable(board,agg){
   // A filter that matches nothing used to leave a header above empty space with
   // no explanation, which reads as a broken page rather than an empty result.
   const none=el("p","noresults");none.hidden=true;wrap.appendChild(none);
+  // Everyone the collector has ever recorded this season, not just the 250
+  // standing on the board right now. Looking somebody up and getting nothing
+  // cannot distinguish "never on the board" from "was, and fell off" - which is
+  // usually the more interesting answer.
+  const gone=el("div","departed");gone.hidden=true;wrap.appendChild(gone);
+
   const applyFilter=()=>{
     const q=inp.value.trim().toLowerCase();
     S.filter=q;
@@ -759,8 +889,10 @@ function ladderTable(board,agg){
       const d=tr.nextElementSibling;
       if(d&&d.classList.contains("detailrow"))d.hidden=hide;   // keep the pair together
     });
-    none.hidden=!(q&&shown===0);
-    none.textContent=none.hidden?"":`No account on the board matches “${inp.value.trim()}”.`;
+    const left=q?departedMatches(q,board,agg):[];
+    renderDeparted(gone,left,q,agg);
+    none.hidden=!(q&&shown===0&&!left.length);
+    none.textContent=none.hidden?"":`Nothing on the board or in this season's history matches “${inp.value.trim()}”.`;
   };
   inp.addEventListener("input",applyFilter);
   if(S.filter)applyFilter();
