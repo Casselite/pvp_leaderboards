@@ -320,6 +320,12 @@ def merge(agg, rows, iso):
                 "f": iso, "l": iso, "n": 1,
                 "br": r["rank"], "bt": r["rating"],
                 "fg": r["games"], "lg": r["games"],
+                # lr/lk are the LAST rating and rank, as distinct from the best
+                # ones. Without them a player who has left the board can only be
+                # described by their peak, which says nothing about why they fell
+                # off - the interesting question is where they were standing when
+                # they went, not how high they once got.
+                "lr": r["rating"], "lk": r["rank"],
             }
         else:
             p["l"] = iso
@@ -332,6 +338,8 @@ def merge(agg, rows, iso):
             # previous value is how "stopped playing" is told apart from
             # "lost rating" when someone drops off the board.
             p["lg"] = r["games"]
+            p["lr"] = r["rating"]
+            p["lk"] = r["rank"]
 
     ratings = sorted([r["rating"] for r in rows if r["rating"] is not None])
     med = ratings[len(ratings) // 2] if ratings else None
