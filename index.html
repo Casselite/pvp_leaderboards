@@ -69,6 +69,26 @@
   .note{color:var(--muted);font-size:13.5px;max-width:64ch;margin:0}
   .note b{color:var(--ink-2)}
 
+  /* Staleness banner. A thirteen-hour-old board looks exactly like a fresh one,
+     so the age has to be stated where it cannot be missed rather than in a
+     footnote. Warn tones for a few missed passes, neg tones once the collector
+     is unambiguously down. */
+  .stale{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--line);
+    border-radius:3px;padding:12px 15px;margin-bottom:18px;font-size:13.5px;line-height:1.45}
+  /* display:flex beats the hidden attribute's default display:none, so a fresh
+     board would show an empty warning box. Needed on every element this page
+     hides by attribute, not just this one. */
+  [hidden]{display:none!important}
+  .stale.warn{background:var(--warn-soft);border-color:var(--warn);color:var(--ink)}
+  .stale.down{background:var(--neg-soft);border-color:var(--neg);color:var(--ink)}
+  .stale b{display:block;margin-bottom:2px}
+  .stale.warn b{color:var(--warn)}
+  .stale.down b{color:var(--neg)}
+  .stale span{color:var(--ink-2)}
+  .stale .mark{flex:0 0 auto;width:8px;height:8px;border-radius:50%;margin-top:6px}
+  .stale.warn .mark{background:var(--warn)}
+  .stale.down .mark{background:var(--neg)}
+
   /* Explicit track counts rather than auto-fit. There are always six tiles, and
      auto-fit was allocating a seventh track that collapsed to 0px but still cost
      a 1px gap - a stray hairline down the right edge of the row. */
@@ -225,10 +245,12 @@
     <p class="note" id="regionnote"></p>
   </div>
 
+  <div id="stale" class="stale" hidden></div>
+
   <div id="view"></div>
 
   <footer>
-    <p id="foot">Board and history are both collected hourly by a GitHub Actions job in this repository and read from <code>data/</code> — it keeps running whether or not anyone has this page open. The board is a stored snapshot rather than a live call, so everyone sees the same one and it always matches the history beside it.</p>
+    <p id="foot">Board and history are both collected by a GitHub Actions job in this repository and read from <code>data/</code>. It aims for one snapshot an hour and runs whether or not anyone has this page open — but it can stop, so the age of the data is stated at the top of the page whenever it falls behind, not just in the timestamp below. The board is a stored snapshot rather than a live call, so everyone sees the same one and it always matches the history beside it.</p>
     <p id="histfoot"></p>
   </footer>
 </div>
@@ -1280,6 +1302,50 @@ function markRegion(){
   if(S.hist&&S.hist.updated)
     $("#histfoot").textContent="History last collected "+new Date(S.hist.updated).toLocaleString()
       +" · "+fmt(a?a.snapshots:0)+" snapshots recorded.";
+  renderStale();
+}
+
+/* How old the data is, in hours, or null when there is no timestamp to judge.
+   Read from the region actually on screen: one collector can be healthy while
+   the other is dead, and a shared "last updated" would hide that. */
+function dataAgeH(){
+  const a=S.hist&&S.hist.regions?S.hist.regions[S.region]:null;
+  const t=(a&&a.lastAt)||(S.hist&&S.hist.updated);
+  if(!t)return null;
+  const ms=Date.now()-new Date(t).getTime();
+  return isFinite(ms)?ms/36e5:null;
+}
+/* Round ONCE, and let both the wording and the severity read the same number.
+   Deciding severity on the raw 5.9 while printing the rounded 6 produced a
+   banner that said "6 hours ago" in the mild "just a missed pass" tone. */
+function ageWords(hr){
+  if(hr<2)return "under two hours ago";
+  if(hr===1)return "an hour ago";
+  if(hr<48)return hr+" hours ago";
+  const d=Math.round(hr/24);
+  return d+(d===1?" day ago":" days ago");
+}
+/* The collector aims for one snapshot an hour. Two hours is a missed pass and
+   might be GitHub dropping a scheduled run, which it does routinely. Six hours
+   is no longer bad luck: on 15 Sept the season lookup broke and every run
+   reported success while writing nothing for thirteen hours, which was
+   invisible because the only clue was a timestamp in the footer. Hence this. */
+function renderStale(){
+  const el=$("#stale"); if(!el)return;
+  const raw=dataAgeH();
+  if(raw==null){ el.hidden=true; el.className="stale"; return; }
+  const hr=Math.round(raw);
+  if(hr<2){ el.hidden=true; el.className="stale"; return; }
+  const down=hr>=6;
+  el.className="stale "+(down?"down":"warn");
+  el.innerHTML='<span class="mark"></span><div><b>'
+    +(down?"The collector looks down.":"Collection has fallen behind.")
+    +'</b><span>Last '+S.region.toUpperCase()+' snapshot was '+ageWords(hr)
+    +(down
+      ? '. Everything below is that old — ratings, the cut line and the roster have all moved since. Check the Actions tab in the repository.'
+      : '. It aims for one an hour; a missed pass or two is usually GitHub dropping a scheduled run.')
+    +'</span></div>';
+  el.hidden=false;
 }
 function setTab(t){ S.tab=t; markTabs(); syncHash(); render(); }
 function setRegion(r){
@@ -1357,6 +1423,9 @@ async function boot(){
     syncHash();
     render();
     setInterval(refresh,10*60*1000);   // the collector writes hourly; this picks up the new file
+    // The age grows while the page sits open. Without this, a tab left open
+    // overnight keeps showing "collected 40 minutes ago" forever.
+    setInterval(renderStale,60*1000);
   }catch(e){
     const s=el("div","state err");
     s.appendChild(el("h2",null,"Could not load the collected board"));
