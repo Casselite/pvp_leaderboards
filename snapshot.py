@@ -60,6 +60,20 @@ FORCE_POINT_AFTER_H = 6      # record a point even when nothing changed, this of
 MIN_SNAPSHOT_GAP_S = 900     # ignore a second history point inside this window
 WEEKLY_MATCH_STEP = 15       # the match minimum rises by this every week
 BUMP_WINDOW_H = 48           # how long a requirement rise is measured for
+
+# Around a requirement rise the hourly grid is too coarse. The rise is scheduled
+# on the hour, but the API recomputes on its own clock, so an on-the-hour pass
+# can land a second after the boundary and see nothing. These are extra passes,
+# minutes after a scheduled rise, that keep looking until the minimum actually
+# moves. They do not replace the hourly pass - that one is what captures the
+# pre-rise roster, which cannot be recovered afterwards.
+#
+# A probe only writes a history point if the observed minimum has CHANGED, so
+# probes that see nothing cost an API call and nothing else. The offsets are
+# front-loaded because the recompute is more likely to be prompt than late; once
+# a few rises have been measured the real latency will be visible in the bump
+# records and this list can shrink to one well-placed pass.
+BUMP_PROBE_MIN = [6, 13, 25, 40, 55]
 UA = "gw2-ladder-tracker (+github actions)"
 
 
@@ -86,17 +100,53 @@ def fetch(path, tries=4):
     raise RuntimeError("failed after %d tries: %s (%s)" % (tries, url, last))
 
 
-def active_season():
+def active_season(known_start=None):
+    """The season currently running, found by asking EVERY season, not the tail.
+
+    /v2/pvp/seasons returns ids in NO GUARANTEED ORDER. This function used to
+    fetch only the last 20 and look for active:true among them, which worked
+    until ArenaNet reshuffled the list - on 2026-09-15 the running season moved
+    to index 37 of 78, forty places from the end, and dropped out of that window.
+    The old code then fell through to "newest by start date among those twenty"
+    and picked PvP League 3v3 Season Twelve, which ended in March 2025. Its
+    ladder is empty, an empty board is a legitimate state the collector refuses
+    to record over good history, so every pass wrote nothing and every run
+    reported success. Twelve hours of the season's most interesting event were
+    lost to a silent fallback.
+
+    So: no slicing, and no quiet fallback. If nothing is active, or the season
+    found is OLDER than the one already being recorded, this raises. A failed
+    pass is visible in the workflow log; a wrong season is not.
+    """
     ids, _ = fetch("/pvp/seasons")
-    tail = ids[-20:]
-    objs, _ = fetch("/pvp/seasons?lang=en&ids=" + ",".join(tail))
-    for s in objs:
-        if s.get("active"):
-            return s
-    dated = sorted([s for s in objs if s.get("start")], key=lambda s: s["start"], reverse=True)
-    if not dated:
-        raise RuntimeError("no season with a start date found")
-    return dated[0]
+    if not ids:
+        raise RuntimeError("/pvp/seasons returned no ids")
+    objs = []
+    for i in range(0, len(ids), 20):            # the endpoint caps ids per call
+        chunk, _ = fetch("/pvp/seasons?lang=en&ids=" + ",".join(ids[i:i + 20]))
+        if isinstance(chunk, list):
+            objs.extend(chunk)
+    active = [s for s in objs if s and s.get("active")]
+    if not active:
+        raise RuntimeError(
+            "no active season among %d seasons - refusing to guess. The last "
+            "time this was guessed it silently collected a season that ended in "
+            "2025." % len(objs))
+    if len(active) > 1:
+        # More than one can be flagged active around a rollover; take the one
+        # that started most recently rather than whichever came back first.
+        active.sort(key=lambda s: s.get("start") or "", reverse=True)
+        print("  %d seasons flagged active; taking the newest (%s)"
+              % (len(active), active[0].get("name")))
+    season = active[0]
+    # Never walk backwards. A new season starting is normal; the "current"
+    # season suddenly being an older one is always a bug or an API glitch.
+    if known_start and season.get("start") and season["start"][:19] < known_start[:19]:
+        raise RuntimeError(
+            "active season %r starts %s, BEFORE the season already being "
+            "recorded (%s) - refusing to overwrite newer history with older."
+            % (season.get("name"), season.get("start"), known_start))
+    return season
 
 
 def scoring_ids(season):
@@ -219,6 +269,90 @@ def bump_times(season):
         out.append((t, WEEKLY_MATCH_STEP * (w + 1)))
         w += 1
     return out
+
+
+def probe_window(season, now):
+    """The scheduled rise this moment is probing, as (boundary, expected_min).
+
+    Returns None outside the probing period, when the collector runs on its
+    ordinary hourly grid.
+    """
+    if not BUMP_PROBE_MIN:
+        return None
+    span = timedelta(minutes=max(BUMP_PROBE_MIN) + 5)
+    for t, required in bump_times(season):
+        if t <= now < t + span:
+            return t, required
+    return None
+
+
+def still_probing(season, now, min_games_now):
+    """Are we inside a rise window that has not yet been observed to happen?
+
+    The stopping condition is the OBSERVED minimum reaching what the calendar
+    says it should be - not a difference between the last two history points,
+    which stops being true again as soon as a third point lands and would leave
+    the collector probing for the rest of the window.
+
+    An observed rise that falls short of the calendar (say 15 -> 25 when 30 was
+    expected) keeps probing until the window closes. That costs a few API calls
+    and is the behaviour we want: the schedule is a guess, the board is not.
+    """
+    w = probe_window(season, now)
+    if w is None:
+        return None
+    t, required = w
+    if min_games_now is not None and required is not None and min_games_now >= required:
+        return None
+    return t
+
+
+def next_wake_seconds(season, now, min_games_now):
+    """How long to sleep before the next pass.
+
+    Normally: to the top of the next hour, so snapshots land on a tidy grid and
+    line up with the API's own hourly recompute. Approaching a scheduled rise:
+    to the boundary itself, so the pass that captures the irrecoverable pre-rise
+    roster happens as late as possible. Just after one, until it is observed:
+    to the next probe offset.
+    """
+    def to_next_hour():
+        nxt = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        return max(60, int((nxt - now).total_seconds()))
+
+    t = still_probing(season, now, min_games_now)
+    if t is not None:
+        for mins in sorted(BUMP_PROBE_MIN):
+            at = t + timedelta(minutes=mins)
+            if at > now:
+                return max(60, int((at - now).total_seconds()))
+        return to_next_hour()
+
+    # Not probing. If a rise is scheduled inside the next hour, land on it.
+    for bt, _ in bump_times(season):
+        if now < bt <= now + timedelta(hours=1):
+            return max(60, int((bt - now).total_seconds()))
+    return to_next_hour()
+
+
+def emit_wake(season, hist):
+    """Tell the workflow how long to sleep, on every exit path.
+
+    Printed as a single parseable line rather than returned, because the loop
+    that does the sleeping is the shell script, not this process. If the line is
+    missing or unparseable the workflow falls back to the top of the next hour,
+    so this is a hint and never a dependency.
+    """
+    try:
+        ser = (hist.get("regions", {}).get(REGION, {}) or {}).get("series") or []
+        mg_now = ser[-1].get("mg") if ser else None
+        now = datetime.now(timezone.utc)
+        s = next_wake_seconds(season, now, mg_now)
+        why = ("probing for a requirement rise (minimum still %s)" % mg_now
+               if still_probing(season, now, mg_now) else "hourly grid")
+        print("NEXT_WAKE_S=%d  (%s)" % (s, why))
+    except Exception as e:                       # noqa: BLE001
+        print("  could not compute next wake (%s); workflow will use the hour" % e)
 
 
 def record_bump(agg, season, rows, iso, pre_roster, cut_before, prev_count,
@@ -558,7 +692,16 @@ def save(path, obj):
 
 
 def main():
-    season = active_season()
+    # Read the season we are already recording BEFORE asking the API, so a
+    # season that goes backwards can be rejected instead of silently adopted.
+    known_start = None
+    try:
+        prior = load_optional(HISTORY) or {}
+        known_start = prior.get("start")
+    except Exception:                            # noqa: BLE001 - never block on this
+        known_start = None
+
+    season = active_season(known_start)
     if not season.get("active"):
         # Between seasons the API still serves the finished board. Recording it
         # hourly would inflate every "times seen" count and paint a perfectly
@@ -642,6 +785,27 @@ def main():
         except (ValueError, TypeError):
             too_soon = False
 
+    # The one case worth breaking the gap guard for: a probe pass, minutes after a
+    # scheduled requirement rise, that can SEE the rise. The guard exists to drop
+    # duplicate snapshots at workflow handover, where nothing has changed; here
+    # something has, and it is the single most informative point in the season.
+    # A probe that observes no change still writes nothing, so the series does not
+    # fill up with near-identical points on bump days.
+    if too_soon and rows:
+        try:
+            gob = sorted([r["games"] for r in rows if r.get("games") is not None])
+            mg_seen = gob[0] if gob else None
+            mg_last = prev_series[-1].get("mg") if prev_series else None
+            now_dt = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            if (mg_seen is not None and mg_last is not None and mg_seen > mg_last
+                    and probe_window(season, now_dt) is not None):
+                print("  probe pass sees the minimum move %s -> %s only %.0fs after"
+                      " the last point - recording it anyway"
+                      % (mg_last, mg_seen, gap))
+                too_soon = False
+        except (ValueError, TypeError, KeyError, IndexError):
+            pass
+
     changed = False
     if too_soon and rows:
         print("  last snapshot was %.0fs ago (<%ds) - refreshing the board only,"
@@ -655,6 +819,7 @@ def main():
             "rows": rows,
         })
         print("  wrote %s (%d rows)" % (BOARD, len(rows)))
+        emit_wake(season, hist)
         return 0
     if not rows:
         # Empty board is normal at season start, but it is also what a failed
@@ -712,6 +877,7 @@ def main():
 
     if not changed:
         print("nothing to write")
+        emit_wake(season, hist)
         return 0
 
     save(HISTORY, hist)
@@ -720,6 +886,7 @@ def main():
               % (region, a.get("snapshots", 0), len(a.get("players", {})),
                  "" if region == REGION else "  (other collector)"))
     print("wrote %s" % HISTORY)
+    emit_wake(season, hist)
     return 0
 
 
