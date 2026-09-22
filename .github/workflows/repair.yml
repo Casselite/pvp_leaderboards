@@ -1,0 +1,67 @@
+name: Repair ladder history
+
+# Run by hand only. This exists to clean a specific kind of damage: a pass where
+# the API served another region's board and the collector recorded it as ours.
+# It is safe to leave in the repository and safe to delete once used.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Write the changes? Leave false for a dry run first.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Shares the collector's lock so the two can never write data/ at the same time.
+# Cancel any running collector before starting this, or it will wait for it.
+concurrency:
+  group: ladder-snapshot
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show what would change
+        run: python3 repair_foreign.py
+
+      - name: Apply the repair
+        if: ${{ inputs.apply }}
+        run: python3 repair_foreign.py --apply
+
+      - name: Commit
+        if: ${{ inputs.apply }}
+        run: |
+          set -u
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # The backup the script writes is for a local run; in CI the previous
+          # state is already in git history, so it is noise. Drop it.
+          rm -f data/history.json.before-repair
+          if [ -z "$(git status --porcelain data)" ]; then
+            echo "Nothing changed - the history was already clean."
+            exit 0
+          fi
+          git add data
+          git commit -m "repair: drop foreign regional board recorded as ours"
+          git push
+          echo "Repair committed."
+
+      - name: Result
+        run: |
+          python3 - <<'PY'
+          import json
+          h = json.load(open("data/history.json"))
+          for region, agg in sorted(h.get("regions", {}).items()):
+              ser = agg.get("series") or []
+              print("%s: %d accounts ever seen, %d snapshots"
+                    % (region, len(agg.get("players") or {}), agg.get("snapshots", 0)))
+              if ser:
+                  print("   latest point: %s  cut=%s  ever=%s"
+                        % (ser[-1].get("t"), ser[-1].get("r250"), ser[-1].get("ever")))
+          PY
