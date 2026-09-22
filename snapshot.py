@@ -442,6 +442,62 @@ def record_bump(agg, season, rows, iso, pre_roster, cut_before, prev_count,
           % (rec["series"][-1]["h"], len(names), held, back, fresh))
 
 
+FOREIGN_WINDOW_H = 12        # how far back "who was recently here" reaches
+FOREIGN_MIN_OVERLAP = 0.20   # below this share of familiar names, refuse the board
+
+
+def foreign_board(agg, rows, iso):
+    """Is this somebody else's regional board? Returns the overlap, or None.
+
+    The ladder API serves whichever region the CALLER sits in and never says
+    which one it gave you. GitHub reassigns runner IPs constantly, so a runner
+    that normally geolocates to the US can be placed in Europe for a single
+    request. That happened at 2026-09-22T06:00:06Z: one pass recorded the entire
+    EU board as NA, adding 251 accounts that were never seen again and inflating
+    every cumulative statistic in the file.
+
+    The signature is unmistakable once you look for it - that pass replaced 249
+    of 250 players while recording ZERO games played, which cannot happen. Real
+    churn requires somebody to finish a match.
+
+    Comparing against the previous roster alone is not enough: if a foreign board
+    were served twice in a row, the second pass would look perfectly stable
+    against the first. So this compares against everyone seen in the last
+    FOREIGN_WINDOW_H hours, which a foreign board misses almost entirely.
+
+    For scale on the threshold: the largest legitimate upheaval this collector
+    has recorded is the 15 Sept requirement rise, which replaced 47% of the board
+    in one pass and still kept 53% overlap. Twenty percent is far below anything
+    the ladder does on its own.
+    """
+    names = set(r.get("name") for r in rows if r.get("name"))
+    if not names:
+        return None
+    prev = agg.get("current") or []
+    if len(prev) < 50:
+        return None                      # early season: nothing to compare against
+    try:
+        now = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+    cutoff = now - timedelta(hours=FOREIGN_WINDOW_H)
+    recent = set()
+    for name, p in (agg.get("players") or {}).items():
+        last = p.get("l")
+        if not last:
+            continue
+        try:
+            t = datetime.strptime(last[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+        if t >= cutoff:
+            recent.add(name)
+    if len(recent) < 50:
+        return None                      # not enough recent history to judge
+    overlap = len(names & recent) / float(len(names))
+    return overlap if overlap < FOREIGN_MIN_OVERLAP else None
+
+
 def merge(agg, rows, iso):
     """Fold one snapshot into the aggregate. Idempotent per account name."""
     for r in rows:
@@ -835,6 +891,23 @@ def main():
         # pass's board and the pre-rise roster is gone for good. The history keeps
         # only the latest board, so there is no second chance to read it.
         agg_now = hist["regions"][REGION]
+
+        # Refuse a board that is not ours. Skipping an hour costs one data point;
+        # accepting a foreign board permanently corrupts every cumulative count in
+        # the file, and no later pass can undo it.
+        ov = foreign_board(agg_now, rows, iso)
+        if ov is not None:
+            print("  REFUSED: only %.1f%% of this board has been seen here in the"
+                  " last %dh. This is almost certainly another region's ladder -"
+                  " the API serves the board for the caller's location and this"
+                  " runner has been geolocated elsewhere. Keeping the previous"
+                  " board and history untouched." % (ov * 100, FOREIGN_WINDOW_H))
+            print("  (first few unfamiliar names: %s)"
+                  % ", ".join(sorted(set(r.get("name") for r in rows
+                                         if r.get("name")))[:5]))
+            emit_wake(season, hist)
+            return 0
+
         pre_rows = agg_now.get("current") or []
         pre_names = [r.get("name") for r in pre_rows if r.get("name")]
         pre_ratings = sorted([r["rating"] for r in pre_rows if r.get("rating") is not None])
