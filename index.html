@@ -66,7 +66,22 @@
   .seg button{font-family:Oswald,sans-serif;font-size:13.5px;letter-spacing:.06em;text-transform:uppercase;
     background:none;border:0;color:var(--muted);padding:6px 16px;border-radius:2px;cursor:pointer}
   .seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
-  .note{color:var(--muted);font-size:13.5px;max-width:64ch;margin:0}
+  .note{color:var(--muted);font-size:13.5px;max-width:64ch;margin:0;line-height:1.6}
+
+  /* Folded explanations. Everything the page used to say is still here, but it
+     waits to be asked instead of forming a wall under every panel. */
+  .why{margin:13px 0 0;max-width:68ch}
+  .why summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px;
+    font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+    padding:3px 0;user-select:none}
+  .why summary::-webkit-details-marker{display:none}
+  .why summary::before{content:"+";font-family:Oswald,sans-serif;font-size:14px;line-height:1;
+    width:13px;text-align:center}
+  .why[open] summary::before{content:"\2013"}
+  .why summary:hover{color:var(--ink-2)}
+  .why summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
+  .why>p{margin:9px 0 0;color:var(--muted);font-size:13.5px;line-height:1.65}
+  .why>p b{color:var(--ink-2)}
   .note b{color:var(--ink-2)}
 
   /* Staleness banner. A thirteen-hour-old board looks exactly like a fresh one,
@@ -94,7 +109,10 @@
      a 1px gap - a stray hairline down the right edge of the row. */
   .tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--line);
     border:1px solid var(--line);border-radius:3px;overflow:hidden;margin-bottom:20px}
-  .tile{background:var(--surface);padding:13px 15px}
+  /* A label that wraps to two lines used to shove its number down and break the
+     row of figures. Pin the numbers to the bottom instead. */
+  .tile{background:var(--surface);padding:13px 15px;display:flex;flex-direction:column;
+    justify-content:space-between;min-height:76px}
   .tile dt{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 5px;
     font-family:"JetBrains Mono",monospace}
   .tile dd{margin:0;font-family:Oswald,sans-serif;font-weight:500;font-size:26px;line-height:1.05;font-variant-numeric:tabular-nums}
@@ -103,13 +121,18 @@
   @media (min-width:620px){ .tiles{grid-template-columns:repeat(3,1fr)} }
   @media (min-width:1000px){ .tiles{grid-template-columns:repeat(6,1fr)} }
 
-  .panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:16px;margin-bottom:20px}
+  /* Each panel keeps its own height. Stretching a four-row panel to match a
+     seven-row one just adds a void under the short one. */
+  .panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:18px;
+    margin-bottom:26px;align-items:start}
   .panel{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:17px 19px;box-shadow:var(--shadow)}
   .panel.wide{grid-column:1/-1}
   .panel h2{font-size:16px;margin:0 0 3px;text-transform:uppercase;letter-spacing:.05em}
-  .panel .sub{color:var(--muted);font-size:13px;margin:0 0 13px}
-  .rows{display:flex;flex-direction:column;gap:9px}
-  .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:14.5px}
+  .panel .sub{color:var(--muted);font-size:13.5px;line-height:1.55;max-width:58ch;margin:0 0 15px}
+  .rows{display:flex;flex-direction:column;gap:11px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:14.5px;
+    padding-bottom:10px;border-bottom:1px solid var(--line)}
+  .row:last-child{padding-bottom:0;border-bottom:none}
   .row .k{color:var(--ink-2)}
   .row .v{font-family:Oswald,sans-serif;font-weight:500;font-size:17px;font-variant-numeric:tabular-nums;white-space:nowrap}
   .row .v.mut{color:var(--muted);font-size:13.5px;font-family:"Source Sans 3",sans-serif;font-weight:400}
@@ -124,6 +147,13 @@
      also makes this a clipping context, which silently stops the sticky header
      inside it from sticking to the viewport. */
   .tablewrap{background:var(--surface);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow)}
+  tbody tr.hiddenday{display:none}
+  table.showall tbody tr.hiddenday{display:table-row}
+  .morebtn{display:block;width:100%;background:none;border:none;border-top:1px solid var(--line);
+    color:var(--muted);font:inherit;font-size:12.5px;letter-spacing:.07em;text-transform:uppercase;
+    padding:11px;cursor:pointer}
+  .morebtn:hover{color:var(--ink-2);background:var(--surface-2)}
+  .morebtn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
   .thead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 17px;border-bottom:1px solid var(--line)}
   .thead h2{font-size:16px;margin:0;text-transform:uppercase;letter-spacing:.05em}
   .search{font:inherit;font-size:14px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink);
@@ -250,7 +280,7 @@
   <div id="view"></div>
 
   <footer>
-    <p id="foot">Board and history are both collected by a GitHub Actions job in this repository and read from <code>data/</code>. It aims for one snapshot an hour and runs whether or not anyone has this page open — but it can stop, so the age of the data is stated at the top of the page whenever it falls behind, not just in the timestamp below. The board is a stored snapshot rather than a live call, so everyone sees the same one and it always matches the history beside it.</p>
+    <p id="foot">Recorded once an hour by a job in this repository, running whether or not anyone has this page open. Everyone sees the same stored copy, so the table and the history beside it always agree. If recording ever falls behind, a banner says so at the top of the page.</p>
     <p id="histfoot"></p>
   </footer>
 </div>
@@ -264,7 +294,12 @@ const WEEKLY_MATCH_STEP=15;          // each week of an active season adds 15 to
 const NEW_WINDOW_H=24;               // how recently first seen still counts as "new"
 const $=s=>document.querySelector(s);
 const el=(t,c,x)=>{const n=document.createElement(t);if(c)n.className=c;if(x!=null)n.textContent=x;return n;};
-const fmt=n=>(n==null||!isFinite(n))?"—":Number(n).toLocaleString();
+// Long explanations used to sit open under every panel, which is what made
+// the page feel like a wall. Same words, folded away until asked for.
+const why=(html,label)=>{const d=el("details","why");
+  d.appendChild(el("summary",null,label||"What this means"));
+  const p=el("p");p.innerHTML=html;d.appendChild(p);return d;};
+const fmt=n=>(n==null||!isFinite(n))?"—":(Math.abs(n)<10000?String(n):Number(n).toLocaleString());
 // "2026-09-09" parses as UTC midnight, which formats as the previous day
 // anywhere west of Greenwich. Build a local date from the parts instead.
 const dayLabel=(key,opts)=>{const[y,m,d]=key.split("-").map(Number);
@@ -589,13 +624,13 @@ function tiles(board,agg){
   const st=board?stats(board.rows):null;
   const ever=agg&&agg.players?Object.keys(agg.players).length:null;
   const box=el("dl","tiles");
-  [["On the board",st?fmt(st.count):"0",st?null:"awaiting placements"],
-   ["Rating #1",st?fmt(st.top.rating):"—",null],
-   [st&&st.count<250?"Lowest on board":"Cut for top 250",st?fmt(st.cut250):"—",
+  [["Players on the board",st?fmt(st.count):"0",st?null:"awaiting placements"],
+   ["Best rating",st?fmt(st.top.rating):"—",null],
+   [st&&st.count<250?"Lowest on the board":"Cut-off rating",st?fmt(st.cut250):"—",
     st&&st.count<250?"board not full":null],
-   ["Median rating",st?fmt(st.medRating):"—",null],
-   ["Spread",st?fmt(st.spread):"—",st?`rank 1 to ${st.count}`:null],
-   ["Distinct players",ever!=null?fmt(ever):"—","this season"]]
+   ["Middle of the pack",st?fmt(st.medRating):"—",null],
+   ["Best to worst",st?fmt(st.spread):"—",st?"points apart":null],
+   ["Different players",ever!=null?fmt(ever):"—","all season"]]
   .forEach(([k,v,s])=>{const d=el("div","tile"+(v==="—"||v==="0"?" pending":""));
     d.appendChild(el("dt",null,k));const dd=el("dd",null,v);
     if(s)dd.appendChild(el("small",null,s));d.appendChild(dd);box.appendChild(d);});
@@ -616,28 +651,29 @@ function ladderView(){
     v.appendChild(s);return v;
   }
   const st=stats(board.rows),P=el("div","panels");
-  const p2=el("div","panel");p2.appendChild(el("h2",null,"What it costs"));
-  p2.appendChild(el("p","sub","Rating needed to hold each position right now."));
+  const p2=el("div","panel");p2.appendChild(el("h2",null,"What each rank costs"));
+  p2.appendChild(el("p","sub","The rating you need to sit at each position."));
   const r2=el("div","rows");
   [["Rank 1",st.top.rating],["Top 10",st.cut10],["Top 25",st.cut25],["Top 100",st.cut100],
-   [st.count<250?`Lowest of ${st.count} on the board`:"Top 250 (cut line)",st.cut250],
-   ["Lead of #1 over #2",st.gap!=null?(st.gap>0?"+":"")+fmt(st.gap):"—"],
-   ["Spread across the board",st.spread]]
+   [st.count<250?`Lowest of ${st.count} on the board`:"Top 250 — the cut-off",st.cut250],
+   ["How far #1 is ahead of #2",st.gap!=null?(st.gap>0?"+":"")+fmt(st.gap):"—"],
+   ["Points between #1 and last",st.spread]]
    .forEach(([k,val])=>{const r=el("div","row");r.appendChild(el("span","k",k));
      r.appendChild(el("span","v",typeof val==="string"?val:fmt(val)));r2.appendChild(r);});
   p2.appendChild(r2);P.appendChild(p2);
 
   const p3=el("div","panel");p3.appendChild(el("h2",null,"Activity"));
-  p3.appendChild(el("p","sub","Games played is wins plus losses — the only volume the API exposes."));
+  p3.appendChild(el("p","sub","Wins plus losses. The only measure of activity the game hands out."));
   const r3=el("div","rows");
-  const a=[["Median games played",fmt(st.medGames)],["Median win rate",pct(st.medWr)]];
-  if(st.mostGames)a.push(["Most active",`${st.mostGames.name} · ${fmt(st.mostGames.games)}`]);
-  if(st.bestWr)a.push(["Best win rate (20+ games)",`${st.bestWr.name} · ${pct(st.bestWr.wr)}`]);
+  const a=[["Games played by a typical player",fmt(st.medGames)],
+           ["Win rate of a typical player",pct(st.medWr)]];
+  if(st.mostGames)a.push(["Played the most",`${st.mostGames.name} · ${fmt(st.mostGames.games)}`]);
+  if(st.bestWr)a.push(["Best win rate, 20+ games",`${st.bestWr.name} · ${pct(st.bestWr.wr)}`]);
   a.forEach(([k,val])=>{const r=el("div","row");r.appendChild(el("span","k",k));
     r.appendChild(el("span","v"+(String(val).includes("·")?" mut":""),val));r3.appendChild(r);});
   p3.appendChild(r3);P.appendChild(p3);
 
-  const p4=el("div","panel");p4.appendChild(el("h2",null,"Roster churn"));
+  const p4=el("div","panel");p4.appendChild(el("h2",null,"Who comes and goes"));
   if(agg&&agg.players&&(agg.snapshots||0)>1){
     // Everything here comes from the collector's OWN last snapshot, never from
     // the live board. Mixing the two produced impossible output - "currently on
@@ -652,21 +688,20 @@ function ladderView(){
     // surfacing as a fault rather than described, as it used to be, as the
     // normal lag between a live board and an hourly history.
     const lagged=board.rows.length!==roster.length;
-    p4.appendChild(el("p","sub",`From ${fmt(agg.snapshots)} snapshots since ${new Date(agg.firstAt).toLocaleDateString()}.`));
+    p4.appendChild(el("p","sub",`Checked every hour since ${new Date(agg.firstAt).toLocaleDateString()}.`));
     const r4=el("div","rows");
-    [["Players ever on the board",fmt(ever.length)],
-     ["On it at the last snapshot",fmt(roster.length)],
-     ["Been on and dropped off",fmt(gone.length)],
-     ["Seen in only one snapshot",fmt(once.length)],
-     ["Turnover",ever.length?pct((gone.length/ever.length)*100):"—"]]
+    [["Have been on it at some point",fmt(ever.length)],
+     ["On it right now",fmt(roster.length)],
+     ["Made it on, then fell off",fmt(gone.length)],
+     ["Lasted a single hour",fmt(once.length)],
+     ["Share that fell off again",ever.length?pct((gone.length/ever.length)*100):"—"]]
      .forEach(([k,val])=>{const r=el("div","row");r.appendChild(el("span","k",k));
        r.appendChild(el("span","v",val));r4.appendChild(r);});
     p4.appendChild(r4);
     if(lagged)p4.appendChild(el("p","note",
       `Mismatch: the stored board holds ${fmt(board.rows.length)} rows but the history's last snapshot holds ${fmt(roster.length)}. They are written together, so one of the two files did not commit — the next hourly run should resolve it.`));
   }else{
-    p4.appendChild(el("p","sub","Needs at least two hourly snapshots."));
-    p4.appendChild(el("p","note","Counts everyone who has ever appeared in the top 250 this season, and how many dropped out again. The collector runs hourly, so this fills in on its own."));
+    p4.appendChild(el("p","sub","Fills in once there are two hourly checks to compare."));
   }
   P.appendChild(p4);v.appendChild(P);
   v.appendChild(ladderTable(board,agg));
@@ -929,8 +964,8 @@ function requirementPanel(agg,board){
   const start=S.season&&S.season.start;
   const cur=currentRequirement(start);
   const p=el("div","panel wide");
-  p.appendChild(el("h2",null,"Match requirement"));
-  p.appendChild(el("p","sub","A board slot needs a top-250 rating and a minimum number of games. The minimum rises "+WEEKLY_MATCH_STEP+" every week, and each rise briefly exposes players the board normally hides."));
+  p.appendChild(el("h2",null,"Games you need to qualify"));
+  p.appendChild(el("p","sub","A slot needs a top-250 rating and a minimum number of games played. That minimum climbs by "+WEEKLY_MATCH_STEP+" every week."));
   if(!cur){p.appendChild(el("p","note","Season start unknown, so the schedule cannot be worked out."));return p;}
 
   const bumps=bumpSchedule(start,S.hist&&S.hist.end);
@@ -946,49 +981,57 @@ function requirementPanel(agg,board){
   // disagree, the calendar arithmetic is the thing that is wrong.
   const ser=(agg&&agg.series)||[];
   const obs=(()=>{for(let i=ser.length-1;i>=0;i--)if(ser[i].mg!=null)return ser[i].mg;return null;})();
-  add("Games needed now",fmt(cur.req)+(obs!=null?" · "+fmt(obs)+" observed":""),false);
+  add("Games needed right now",fmt(cur.req)+(obs!=null?" · "+fmt(obs)+" on the board":""),false);
   if(obs!=null&&obs>=cur.req+WEEKLY_MATCH_STEP)
-    add("Note","the board says the rise has already happened",true);
-  add("Rises to",fmt(cur.nextReq));
-  add("When",hrs>0
+    add("Heads up","the board says the step up already happened",true);
+  add("Next step up",fmt(cur.nextReq));
+  add("Happens",hrs>0
     ? new Date(cur.nextAt).toLocaleString()+" · in "+(hrs<48?Math.round(hrs)+"h":Math.round(hrs/24)+" days")
     : "any moment",true);
   if(board&&board.rows.length){
     // Everyone whose season total is under the next line loses their slot unless
     // they play the difference first. This is the size of the coming hole.
     const risk=board.rows.filter(r=>r.games!=null&&r.games<cur.nextReq).length;
-    add("On the board below that line",fmt(risk)+" of "+fmt(board.rows.length),true);
+    add("Would lose their slot today",fmt(risk)+" of "+fmt(board.rows.length),true);
   }
   p.appendChild(rows);
 
   if(!done.length){
-    p.appendChild(el("p","note","No rise has happened yet this season. When the first one lands, this panel records how far the board collapses, how far the cut line falls, how long it takes to refill, and how many accounts appear that had never been seen before — that last number is the only direct count of players sitting below the top 250."));
+    p.appendChild(el("p","sub","Nothing to show until the first step up lands."));
     return p;
   }
 
+  // One row per step up. The collector files two records for each: one on the
+  // calendar boundary and one at the hour the board actually moved, which put
+  // the same requirement on screen twice with different numbers. Prefer the
+  // calendar-anchored record - its 48h window covers the real eviction either
+  // way - and fall back to whatever is complete.
+  const byReq=new Map();
+  done.forEach(d=>{
+    const prev=byReq.get(d.req);
+    if(!prev) {byReq.set(d.req,d);return;}
+    const rank=x=>(x.full?2:0)+(x.unscheduled?0:1);
+    if(rank(d)>rank(prev))byReq.set(d.req,d);
+  });
+  const shown=[...byReq.values()].sort((a,b)=>a.req-b.req);
+
   const wrap=el("div","tablewrap");wrap.style.marginTop="16px";
   const sc=el("div","scroll"),t=el("table");
-  t.innerHTML='<thead><tr><th>Rise</th><th class="n">Board fell to</th><th class="n">Cut fell to</th>'
-    +'<th class="n">Refilled</th><th class="n">Already shown</th><th class="n">Re-surfaced</th>'
-    +'<th class="n">Never seen</th></tr></thead>';
+  // "Board fell to" was 250 on every row and "Refilled" was 0h on every row.
+  // A column that never varies is not information, it is furniture.
+  t.innerHTML='<thead><tr><th>Minimum</th><th class="n">Cut-off dropped to</th>'
+    +'<th class="n">Were already visible</th><th class="n">Came back</th>'
+    +'<th class="n">Never seen before</th></tr></thead>';
   const tb=el("tbody");
-  done.forEach(d=>{
+  shown.forEach(d=>{
     const tr=el("tr");
     const rc=el("td","num",fmt(d.req)+" games");
-    if(d.unscheduled){rc.title="Detected from the board, not from the schedule — "
-      +new Date(d.t).toLocaleString();rc.textContent+=" *";}
+    rc.title=new Date(d.t).toLocaleString();
     tr.appendChild(rc);
-    const lc=el("td","n num",fmt(d.lowCount)+(d.dropped>0?" (−"+fmt(d.dropped)+")":""));
-    if(d.dropped>0)lc.style.color="var(--neg)";
-    lc.title="Board held "+fmt(d.beforeCount)+" immediately before the rise";
-    tr.appendChild(lc);
     const cc=el("td","n num",fmt(d.lowCut)+(d.cutDrop>0?" (−"+fmt(d.cutDrop)+")":""));
     if(d.cutDrop>0)cc.style.color="var(--neg)";
-    cc.title="Cut line was "+fmt(d.beforeCut)+" immediately before the rise";
+    cc.title="The cut-off was "+fmt(d.beforeCut)+" just before this step up";
     tr.appendChild(cc);
-    tr.appendChild(el("td","n num",d.refillH==null
-      ? (d.observedH>=BUMP_WINDOW_H?"never":"not yet")
-      : Math.round(d.refillH)+"h"));
     // The anatomy. Only the last column is evidence about players below the cut;
     // the other two are the same people the board was already showing.
     if(d.full){
@@ -996,25 +1039,29 @@ function requirementPanel(agg,board){
       tr.appendChild(el("td","n num",fmt(d.backCount)));
       const nf=el("td","n num",fmt(d.newFaces));
       if(d.newFaces)nf.style.color="var(--pos)";
-      nf.title="Accounts first recorded after this rise";
+      nf.title="Accounts never recorded before this step up";
       tr.appendChild(nf);
     }else{
       const c=el("td","n num","—");c.setAttribute("colspan","2");
-      c.title="Not recorded for this rise";tr.appendChild(c);
+      c.title="Not recorded for this step up";tr.appendChild(c);
       const nf=el("td","n num",fmt(d.newFaces));
       if(d.newFaces)nf.style.color="var(--pos)";tr.appendChild(nf);
     }
     tb.appendChild(tr);});
   t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
   p.appendChild(wrap);
-  const anat=el("p","note");
-  anat.innerHTML="The last three columns are the board once it had refilled, split by where the players came from. "
-    +"<b>Already shown</b> were on the board immediately before the rise — whether they kept the slot or dropped off "
-    +"and played their way back, the ladder was already showing them. <b>Re-surfaced</b> were recorded earlier this "
-    +"season but had been pushed out by the cut, and became visible again when it fell. <b>Never seen</b> had never "
-    +"been recorded at all.";
-  p.appendChild(anat);
-  p.appendChild(el("p","note","Only that last number says anything about the population below the top 250. Nobody's rating changed because the requirement moved — the rule did — so an account appearing for the first time was always there and always under the cut. Refill time on its own cannot tell that apart from regulars grinding back, which is why the split matters more than the clock."));
+  p.appendChild(why(
+    "When the minimum goes up, players who have not played enough games lose their slot and "
+    +"the cut-off falls to let others in. The last three columns sort those others by where "
+    +"they came from.<br><br>"
+    +"<b>Were already visible</b> \u2014 on the board just before the step up. Whether they kept "
+    +"their slot or dropped off and played their way back, you could already see them.<br>"
+    +"<b>Came back</b> \u2014 recorded earlier in the season, pushed out by the cut, visible "
+    +"again now that it fell.<br>"
+    +"<b>Never seen before</b> \u2014 no record of them at all.<br><br>"
+    +"Only that last number tells you anything about the players below the top 250. Nobody's "
+    +"rating changed when the minimum moved \u2014 the rule did \u2014 so anyone appearing for "
+    +"the first time was always there, just hidden under the cut.","What the columns mean"));
   return p;
 }
 
@@ -1059,37 +1106,42 @@ function populationView(){
   const lastStab=(()=>{for(let i=series.length-1;i>=0;i--)if(series[i].stab!=null)return series[i].stab;return null;})();
 
   const box=el("dl","tiles");
-  [["Distinct players ever",fmt(ever),"this season"],
-   ["Active core",fmt(core),"in ≥half the snapshots"],
-   ["Seen only once",fmt(once),ever?"of "+fmt(ever)+" · "+pct(once/ever*100):null],
-   ["First seen today",fmt(newToday),"never on it before"],
-   ["Board stability",lastStab!=null?pct(lastStab*100):"—","vs last hour"],
-   ["Currently on board",fmt(onBoard),null]]
+  [["Different players",fmt(ever),"all season"],
+   ["The regulars",fmt(core),"over half the time"],
+   ["Lasted a single hour",fmt(once),ever?pct(once/ever*100)+" of them":null],
+   ["New today",fmt(newToday),"never on it before"],
+   ["Same as last hour",lastStab!=null?pct(lastStab*100):"—","of the 250"],
+   ["On the board now",fmt(onBoard),null]]
   .forEach(([k,val,sm])=>{const d=el("div","tile"+(val==="—"?" pending":""));
     d.appendChild(el("dt",null,k));const dd=el("dd",null,val);
     if(sm)dd.appendChild(el("small",null,sm));d.appendChild(dd);box.appendChild(d);});
   v.appendChild(box);
 
   const p1=el("div","panel wide");
-  p1.appendChild(el("h2",null,"Distinct players over the season"));
-  p1.appendChild(el("p","sub","Every account that has appeared in the top 250 at least once, cumulative. The board holds 250 at a time — this is how many different people pass through it."));
+  p1.appendChild(el("h2",null,"How many different people pass through"));
+  p1.appendChild(el("p","sub","The board holds 250 at a time. This counts everyone who has held one of those slots at least once."));
   p1.appendChild(everChart(series,bumpSchedule(S.season&&S.season.start,S.hist&&S.hist.end)));
-  p1.appendChild(el("p","note","If this flattens, the same group is trading places. If it keeps climbing, new players keep breaking in — and the gap between this number and the active core is the size of the churn. The dashed lines mark each rise in the match requirement; a step up right after one is the board admitting players it had been hiding."));
+  p1.appendChild(why("A flat line means the same people are just trading places. A rising line means new players keep breaking in. The dashed lines are the weekly rises in the games requirement \u2014 a step up right after one is the board briefly revealing players who were always there, below the cut."));
   v.appendChild(p1);
 
   v.appendChild(requirementPanel(agg,S.boards[S.region]));
 
   const wrap=el("div","tablewrap");
   const head=el("div","thead");
-  head.appendChild(el("h2",null,"By day"));
-  head.appendChild(el("p","note",`${fmt(snaps)} snapshots. "First seen" counts an account once, on the day it first appeared; "left the board" counts departures between snapshots, so someone who returns can appear there more than once.`));
+  head.appendChild(el("h2",null,"Day by day"));
   wrap.appendChild(head);
   const sc=el("div","scroll"),t=el("table");
-  t.innerHTML=`<thead><tr><th>Day</th><th class="n">First seen</th><th class="n">Left the board</th>
-    <th class="n">Stability</th><th class="n">Distinct total</th></tr></thead>`;
+  t.innerHTML=`<thead><tr><th>Day</th><th class="n">Arrived</th><th class="n">Fell off</th>
+    <th class="n">Stayed put</th><th class="n">Players so far</th></tr></thead>`;
   const tb=el("tbody");
-  days.slice().reverse().forEach(d=>{
+  // Sixty rows of history is a scroll, not a reading. Show the recent fortnight
+  // and keep the rest one click away.
+  const SHOW=14;
+  const ordered=days.slice().reverse();
+  const hidden=Math.max(0,ordered.length-SHOW);
+  ordered.forEach((d,i)=>{
     const tr=el("tr");
+    if(i>=SHOW)tr.className="hiddenday";
     // The weekday is the first thing to go on a narrow screen: it is the widest
     // part of the label and the least informative once the date is right there.
     tr.appendChild(el("td","num",dayLabel(d.d,innerWidth<560
@@ -1104,10 +1156,24 @@ function populationView(){
     tr.appendChild(el("td","n num",fmt(d.ever)));
     tb.appendChild(tr);});
   t.appendChild(tb);sc.appendChild(t);wrap.appendChild(sc);
+  if(hidden){
+    const more=el("button","morebtn","Show all "+ordered.length+" days");
+    more.addEventListener("click",()=>{
+      const open=t.classList.toggle("showall");
+      more.textContent=open?"Show the last "+SHOW+" days":"Show all "+ordered.length+" days";
+    });
+    wrap.appendChild(more);
+  }
   v.appendChild(wrap);
 
-  const note=el("p","note");note.style.marginTop="14px";
-  note.innerHTML="Being on the board needs top-250 rating <em>and</em> enough matches played — and that match minimum rises by "+WEEKLY_MATCH_STEP+" every week of the season. So drop-offs mix people who lost rating with people who simply stopped playing enough, and the second group grows as the season goes on.";
+  const note=why('<b>Arrived</b> counts each account once, on the day it first showed up. '
+    +'<b>Fell off</b> counts departures between hourly checks, so someone who leaves and '
+    +'comes back is counted each time. <b>Stayed put</b> is how much of the 250 was unchanged '
+    +'from one hour to the next.<br><br>A slot needs a top-250 rating <em>and</em> enough games '
+    +'played, and that games minimum climbs by '+WEEKLY_MATCH_STEP+' every week. So people falling off '
+    +'are a mix of those who lost rating and those who simply stopped playing enough \u2014 and '
+    +'the second group grows as the season goes on.','What these columns mean');
+  note.style.marginTop="14px";
   v.appendChild(note);
   return v;
 }
@@ -1116,8 +1182,8 @@ function seasonsView(){
   const v=document.createDocumentFragment();
   const p=el("div","panel wide");
   p.appendChild(el("h2",null,"Past seasons"));
-  p.appendChild(el("p","sub","Final standings of previous 5v5 conquest seasons, fetched live from the API."));
-  p.appendChild(el("p","note","Unlike the Ladder tab, these are fetched by your browser rather than by the collector — and the API returns the board for wherever YOU are, so you get your own region's standings here, which may not be the region shown on the Ladder tab. Loads on demand and is cached in your browser afterwards; finished seasons never change."));
+  p.appendChild(el("p","sub","Where previous seasons finished."));
+  p.appendChild(why("These come straight from the game's own servers to your browser, and the game answers with whichever region <em>you</em> are in \u2014 so this may not match the region on the Ladder tab. Loaded only when you ask, then kept in your browser; a finished season never changes."));
   const btn=el("button","btn","Load season history");btn.id="loadseasons";p.appendChild(btn);
   const out=el("div");out.id="seasonout";p.appendChild(out);
   v.appendChild(p);
@@ -1415,10 +1481,8 @@ async function boot(){
     ["na","eu"].forEach(r=>{const btn=$("#btn-"+r);if(btn)btn.classList.toggle("hidden",!found[r]);});
     $("#regionnote").innerHTML=regions.length>1
       ?"NA and EU are collected separately, each by a machine sitting in that region."
-      :"<b>Only the "+regions[0].toUpperCase()+" board is collected right now.</b> The ladder API ignores the "
-       +"<code>na</code>/<code>eu</code> in the URL and returns the board for wherever the caller is, so one "
-       +"collector can only ever record its own region. A second collector running in the other region makes "
-       +"this toggle appear.";
+      :"<b>Only the "+regions[0].toUpperCase()+" board is being recorded.</b> The game serves whichever "
+       +"region the recorder sits in, so one recorder can only ever see its own.";
     markRegion();
     syncHash();
     render();
