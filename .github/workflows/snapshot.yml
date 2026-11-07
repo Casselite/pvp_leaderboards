@@ -49,7 +49,19 @@ jobs:
           BUDGET=$((5 * 3600 + 1800))     # 5.5 hours
 
           collect_and_push() {
-            python3 snapshot.py || { echo "collector failed this pass"; return 0; }
+            # Exit 3 means "the final season is finished, on purpose" - see
+            # FINAL_SEASON_ID in snapshot.py. Any other non-zero is a real
+            # failure for this pass, which the next hourly pass retries.
+            python3 snapshot.py
+            rc=$?
+            if [ "$rc" -eq 3 ]; then
+              echo "collector reports the final season is finished - stopping."
+              return 3
+            fi
+            if [ "$rc" -ne 0 ]; then
+              echo "collector failed this pass (exit $rc)"
+              return 0
+            fi
             if [ -z "$(git status --porcelain data)" ]; then
               echo "no change to commit"
               return 0
@@ -72,7 +84,7 @@ jobs:
           # Collect immediately, then once per hour until the budget runs out.
           while : ; do
             echo "=== pass at $(date -u +'%Y-%m-%dT%H:%M:%SZ') ==="
-            collect_and_push
+            collect_and_push || { echo "nothing left to collect; exiting for good."; break; }
             ELAPSED=$(( $(date +%s) - START ))
             REMAIN=$(( BUDGET - ELAPSED ))
             [ "$REMAIN" -lt 3600 ] && { echo "budget spent; exiting cleanly"; break; }
